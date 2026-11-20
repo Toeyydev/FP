@@ -1,8 +1,8 @@
-// Tour Upsell PR4 in a real browser: the guide hands in the Extras cash after the end-tour report —
-// a transfer with its actual date and time and its slip (filed to a fake Drive) — and sends it; an
-// Admin returns it for checking (the transfer stays: "do not transfer again"), the guide sends it
-// again, the Admin confirms with every transfer ticked; the cash held goes to 0, once. Phone width
-// on both sides. Invented data only.
+// Tour Upsell PR4 in a real browser, slip only (owner, 20 Nov 2026): the guide hands in the Extras
+// cash after the end-tour report: uploads the bank slip (filed to a fake Drive) and sends; nothing
+// typed. An Admin (phone width) records what the slip shows (short, so it cannot be confirmed) and
+// returns it; the slip stays ("do not transfer again"); the guide sends again; the Admin corrects
+// the recorded amount, ticks it, confirms; the cash held goes to 0, once. Invented data only.
 // Tour Upsell PR3 in a real browser against a real server and database: the guide sells
 // Wat Pho + Wat Arun on their own job and takes the cash (mockup approved 19 Nov 2026).
 //
@@ -193,61 +193,86 @@ try {
   const admin = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN } });
   await prisma.upsellReceivingAccount.create({ data: { version: 1, label: "Folkpaths Extras (example)", peakPaymentMethodId: "pm-e2e", bankAccountKey: "ACC:999007890", accountDisplay: "···7890", confirmedById: admin.id, confirmedAt: new Date() } });
   await goto(guide, JOB_PATH);
-  await tap(guide, ".ups-add-transfer");
-  await guide.type("#ups-t-amount", String(owed / 100));
-  // A controlled input: set it the way a person's typing does (React reads the native setter).
-  await guide.$eval('input[aria-label="Transfer time"]', (el) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "09:15"); el.dispatchEvent(new Event("input", { bubbles: true })); });
-  await guide.type("#ups-t-ref", "KB E2E 7731 0042");
-  await (await guide.$("#ups-t-slip")).uploadFile(SLIP);
-  await tap(guide, ".ups-save-transfer");
-  await guide.waitForSelector(".ups-transfer", { timeout: 15000 });
-  const row = await text(guide, ".ups-transfer");
-  check("the transfer shows its amount, the time the bank sent it, its reference and account", /09:15/.test(row) && /KB E2E 7731 0042/.test(row) && /···7890/.test(row), row);
+  const card = await text(guide, ".ups-code");
+  check("before transferring the guide sees the memo, the job, the amount owed and the account", (await text(guide, ".js-handin")).includes(memo) && /To hand in/.test(card) && /···7890/.test(card), card.slice(0, 300));
+  // Slip only (owner, 20 Nov 2026): no amount, date, time or reference to type.
+  const typed = await guide.$$eval(".js-handin input:not([type=file]), .js-handin select, .js-handin textarea", (els) => els.length);
+  check("slip only: the guide's hand-in has no amount, date, time or reference field", typed === 0, `${typed} field(s)`);
+  await (await guide.$(".ups-upload input[type=file]")).uploadFile(SLIP);
+  await guide.waitForSelector(".ups-slip", { timeout: 15000 });
+  check("the slip is on the hand-in, unverified: no transfer, no bank transaction", (await prisma.cashSettlementSlip.count()) === 1 && (await prisma.cashSettlementTransfer.count()) === 0 && (await prisma.bankTransaction.count()) === 0);
   const f1 = await fits(guide);
   check("390 px (guide): nothing pushes the page sideways", f1.over <= 0, f1.culprits.join(" "));
-  await shot(guide, "guide-ready");
+  await shot(guide, "guide-slip-ready");
   await tap(guide, ".ups-send");
-  await guide.waitForFunction(() => /Sent — waiting for Admin/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
-  check("sent: waiting for Admin, cash held unchanged", (await held()) === owed);
+  await guide.waitForFunction(() => /ส่งแล้ว รอตรวจสอบ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
+  check("sent: ส่งแล้ว รอตรวจสอบ, cash held unchanged", (await held()) === owed);
+  await shot(guide, "guide-sent");
 
-  // ── Admin returns it for checking ──
+  // ── Admin (phone width): reads the slip, records a short amount → cannot confirm → returns it ──
   // Its own browser context: the Admin's session cookie must not replace the guide's.
   const desk = await (await browser.createBrowserContext()).newPage();
   await desk.setCookie(await sessionCookie(ADMIN));
-  await desk.setViewport({ width: 1280, height: 900 });
+  await desk.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+  const setVal = (sel, val) => desk.$eval(sel, (el, v) => { const proto = el.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v); el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true })); }, val);
+  const fill = async (amountBaht) => {
+    await desk.waitForSelector(".js-slip-review");
+    await setVal('.js-slip-review input[aria-label="Amount on the slip"]', String(amountBaht));
+    await setVal('.js-slip-review input[aria-label="Bank reference"]', "KB E2E 7731 0042");
+    await setVal('.js-slip-review input[aria-label="Date on the slip"]', TODAY);
+    await setVal('.js-slip-review input[aria-label="Time on the slip"]', "09:15");
+  };
   await goto(desk, "/upsell-cash");
-  await desk.waitForSelector(".js-return");
-  await desk.click(".js-return");
+  await desk.waitForSelector(".js-confirm");
+  await desk.click(".js-confirm");
+  await desk.waitForSelector(".js-slips-dialog");
+  await fill(owed / 100 - 50);
+  const saveOff = await desk.$eval(".js-slip-save", (b) => b.disabled);
+  check("the Admin must tick that the slip's recipient is the company account before saving", saveOff === true);
+  await desk.click(".js-recipient-ok");
+  await desk.click(".js-slip-save");
+  await desk.waitForSelector(".js-slip-tick", { timeout: 10000 });
+  await desk.click(".js-slip-tick");
+  const dlg = await text(desk, ".js-slips-dialog");
+  const shortOff = await desk.$eval(".js-slips-confirm", (b) => b.disabled);
+  check("short by ฿50: shown, and Confirm stays off (return it)", /Short by ฿50/.test(dlg) && shortOff === true, dlg.slice(0, 300));
+  const f3 = await fits(desk);
+  check("390 px (Admin, checking slips): nothing pushes the page sideways", f3.over <= 0, f3.culprits.join(" "));
+  await shot(desk, "admin-slip-short-390");
+  await desk.click(".js-slips-dialog .btn.danger");
   await desk.waitForSelector(".js-return-dialog");
-  check("the Return dialog says it changes review status only", /Returning changes review status only/.test(await text(desk, ".js-return-dialog")));
-  await desk.type("#rt-why", "Transfer 1 is not on the statement yet (example)");
+  await desk.type("#rt-why", "The slip shows 50 baht less than owed (example)");
   await desk.click(".js-return-dialog .btn.danger");
   await desk.waitForFunction(() => /Returned for checking/.test(document.querySelector(".js-handins")?.textContent ?? ""), { timeout: 10000 });
 
   await goto(guide, JOB_PATH);
-  await guide.waitForSelector(".ups-returned", { timeout: 10000 }).catch(async () => {
-    await shot(guide, "returned-missing");
-    console.log("DEBUG settlement", JSON.stringify(await prisma.cashSettlement.findMany({ select: { status: true, submissionNo: true, returnedReason: true } })));
-    console.log("DEBUG handin", (await text(guide, ".js-handin")).slice(0, 400));
-  });
+  await guide.waitForSelector(".ups-returned", { timeout: 10000 });
   const back = await text(guide, ".js-handin");
   check("returned: the same hand-in code", (await text(guide, ".ups-memo")).trim() === memo);
-  check("returned: the guide reads pending verification — the transfer is included again, do not transfer again", /do not send them again/i.test(back) && /do not transfer again/i.test(back), back.slice(0, 300));
+  check("returned: the slip stays, do not transfer again", /do not transfer again/i.test(back) && (await guide.$$(".ups-slip")).length === 1, back.slice(0, 300));
   await tap(guide, ".ups-send");
-  await guide.waitForFunction(() => /Sent — waiting for Admin/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
+  await guide.waitForFunction(() => /ส่งแล้ว รอตรวจสอบ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
 
-  // ── Admin confirms, every transfer ticked ──
+  // ── Admin corrects what was recorded (the slip, read again, shows the full amount), ticks, confirms ──
   await goto(desk, "/upsell-cash");
   await desk.click(".js-confirm");
-  await desk.waitForSelector(".js-confirm-dialog");
-  const disabledFirst = await desk.$eval(".js-confirm-dialog .btn.primary", (b) => b.disabled);
-  await desk.click('.js-confirm-dialog input[type="checkbox"]');
-  await desk.click(".js-confirm-dialog .btn.primary");
+  await desk.waitForSelector(".js-slips-dialog");
+  await desk.$$eval(".js-slips-dialog .btn", (bs) => bs.find((b) => /Correct what was recorded/.test(b.textContent ?? ""))?.click());
+  await fill(owed / 100);
+  await desk.click(".js-recipient-ok");
+  await desk.click(".js-slip-save");
+  await desk.waitForSelector(".js-slip-tick", { timeout: 10000 });
+  const disabledFirst = await desk.$eval(".js-slips-confirm", (b) => b.disabled);
+  await desk.click(".js-slip-tick");
+  await shot(desk, "admin-slip-verified-390");
+  await desk.click(".js-slips-confirm");
   await desk.waitForFunction(() => /Confirmed/.test(document.querySelector(".js-handins")?.textContent ?? ""), { timeout: 10000 });
-  check("Confirm waits for every transfer to be ticked, then confirms", disabledFirst === true);
+  check("Confirm waits for the reviewed slip to be ticked, then confirms", disabledFirst === true);
+  const t = await prisma.cashSettlementTransfer.findFirst();
+  check("the transfer carries the Admin's facts from the slip (amount, 09:15, ref, account)", t?.amountSatang === owed && t?.bankRef === "KB E2E 7731 0042" && t?.receivingAccountDisplay === "···7890"
+    && new Date(t.transferredAt.getTime() + 7 * 3600_000).toISOString().slice(11, 16) === "09:15", JSON.stringify({ a: t?.amountSatang, r: t?.bankRef }));
   check("confirmed: cash held 0, one remittance", (await held()) === 0 && (await prisma.cashCustodyEntry.count({ where: { kind: "REMITTED" } })) === 1);
   check("the bank clearing is queued and blocked until configured (nothing sent to PEAK)", (await prisma.upsellPeakEvent.count({ where: { eventKind: "BANK_CLEARING", status: "BLOCKED" } })) === 1);
-  await desk.setViewport({ width: 390, height: 844 });
   await goto(desk, "/upsell-cash");
   await desk.waitForSelector(".js-peak-sync");
   const peak = await text(desk, ".js-peak-sync");

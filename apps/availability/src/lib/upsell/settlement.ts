@@ -85,7 +85,7 @@ export const bankMemo = (settlementNo: string) => settlementNo;
 export async function handInView(db: Db, guideId: string, jobSheetId: string) {
   const [held, settlement, account, coverage, job] = await Promise.all([
     heldOn(db, guideId, jobSheetId),
-    db.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId, sourceJobSheetId: jobSheetId } }, include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "asc" } }, returns: { orderBy: { submissionNo: "asc" } } } }),
+    db.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId, sourceJobSheetId: jobSheetId } }, include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "asc" } }, returns: { orderBy: { submissionNo: "asc" } }, slips: { orderBy: { seq: "asc" }, include: { evidence: { select: { driveLink: true } } } } } }),
     currentReceivingAccount(db),
     coverageOf(db, guideId, jobSheetId).then(covered),
     db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { ref: true } }),
@@ -98,7 +98,9 @@ export async function handInView(db: Db, guideId: string, jobSheetId: string) {
     returnedReason: settlement?.returnedReason ?? null,
     receivingAccount: account ? { id: account.id, version: account.version, label: account.label, display: account.accountDisplay } : null,
     transfers: (settlement?.transfers ?? []).map((t) => ({ id: t.id, seq: t.seq, amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), transferDate: t.transferDate, bankRef: t.bankRef, hasSlip: !!(t.slipUrl || t.evidenceId), toAccount: t.receivingAccountDisplay, status: t.status, withdrawnReason: t.withdrawnReason })),
-    history: (settlement?.submissions ?? []).map((s) => ({ coverage: s.coverage, submissionNo: s.submissionNo, totalSatang: s.totalSatang, transferIds: s.transferIds, status: s.status, submittedAt: s.submittedAt.toISOString(), returnedReason: s.returnedReason, returnedAt: s.returnedAt?.toISOString() ?? null, confirmedAt: s.confirmedAt?.toISOString() ?? null })),
+    // The guide's slips: unverified proof, shown as uploaded — never with an amount the guide did not give.
+    slips: (settlement?.slips ?? []).map((x) => ({ id: x.id, seq: x.seq, status: x.status, uploadedAt: x.uploadedAt.toISOString(), url: x.evidence.driveLink, removedReason: x.removedReason, toAccount: x.shownAccountDisplay, confirmed: !!x.transferId })),
+    history: (settlement?.submissions ?? []).map((s) => ({ coverage: s.coverage, submissionNo: s.submissionNo, kind: s.kind, expectedSatang: s.expectedSatang, totalSatang: s.totalSatang, transferIds: s.transferIds, slipIds: s.slipIds, status: s.status, submittedAt: s.submittedAt.toISOString(), returnedReason: s.returnedReason, returnedAt: s.returnedAt?.toISOString() ?? null, confirmedAt: s.confirmedAt?.toISOString() ?? null })),
   };
 }
 
@@ -162,6 +164,9 @@ export async function reportTransfer(db: Db, guide: Guide, input: { jobSheetId: 
     if (!s) refuse(409, "PREPARE_FIRST", "Get the hand-in code first and put it in the transfer's memo");
     if (folkKey(input.bankRef) === folkKey(s!.settlementNo)) refuse(400, "MEMO_AS_REF", "That is the hand-in code (the memo) — enter the bank's own transaction reference from the slip");
     if (s!.status !== "DRAFT" && s!.status !== "RETURNED") refuse(409, "HAND_IN_SENT", s!.status === "SUBMITTED" ? "The hand-in is with Admin — wait for it to be confirmed or returned" : "This job's hand-in is closed");
+    // A hand-in is sent one way: slips (Admin records the facts) or, earlier, reported transfers — never both.
+    if (await tx.cashSettlementSlip.findFirst({ where: { OR: [{ evidenceId: slip!.id }, { settlementId: s!.id, status: "ACTIVE" }] }, select: { id: true } }))
+      refuse(409, "SLIPS_IN_USE", "This hand-in is sent with slips — upload the slip and send");
     const last = await tx.cashSettlementTransfer.aggregate({ where: { settlementId: s!.id }, _max: { seq: true } });
     const transfer = await tx.cashSettlementTransfer.create({ data: {
       settlementId: s!.id, guideId: guide.guideId, seq: (last._max.seq ?? 0) + 1, amountSatang: input.amountSatang,
@@ -234,7 +239,7 @@ async function lockSubmitted(tx: Tx, settlementId: string, submissionNo: number)
   return { s, sub };
 }
 
-export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId: string; submissionNo: number; transferIds: string[] }) {
+export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId: string; submissionNo: number; transferIds?: string[]; slips?: { id: string; reviewVersion: number }[] }) {
   return step(db, async (tx) => {
     await requireAdmin(tx, admin);
     // Pressed again (or a second Admin at once): the same confirmation answers as confirmed, and
@@ -242,28 +247,36 @@ export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId:
     const [now0] = await tx.$queryRaw<{ status: string; submissionNo: number }[]>`SELECT "status", "submissionNo" FROM "CashSettlement" WHERE "id" = ${input.settlementId} FOR UPDATE`;
     if (now0?.status === "CONFIRMED" && now0.submissionNo === input.submissionNo) {
       const done = await tx.cashSettlementSubmission.findUnique({ where: { settlementId_submissionNo: { settlementId: input.settlementId, submissionNo: input.submissionNo } } });
-      if (done?.status === "CONFIRMED" && [...new Set(input.transferIds ?? [])].sort().join() === [...done.transferIds].sort().join()) {
+      const same = done?.kind === "SLIPS" ? [...new Set((input.slips ?? []).map((x) => String(x.id)))].sort().join() === [...done.slipIds].sort().join() : [...new Set(input.transferIds ?? [])].sort().join() === [...(done?.transferIds ?? [])].sort().join();
+      if (done?.status === "CONFIRMED" && same) {
         return tx.cashSettlement.findUniqueOrThrow({ where: { id: input.settlementId } });
       }
     }
     const { s, sub } = await lockSubmitted(tx, input.settlementId, input.submissionNo);
-    if ([...new Set(input.transferIds ?? [])].sort().join() !== [...sub.transferIds].sort().join()) refuse(409, "NOT_ALL_TICKED", "Tick every transfer of this submission once you have seen it on the statement");
+    const slipsMode = sub.kind === "SLIPS";
+    const ticked = slipsMode ? [...new Set((input.slips ?? []).map((x) => String(x.id)))].sort().join() === [...sub.slipIds].sort().join() : [...new Set(input.transferIds ?? [])].sort().join() === [...sub.transferIds].sort().join();
+    if (!ticked) refuse(409, "NOT_ALL_TICKED", slipsMode ? "Tick every slip of this submission once you have seen it on the statement" : "Tick every transfer of this submission once you have seen it on the statement");
+    // What this confirmation remits: the reported transfers' total, or — slips — what was owed as sent,
+    // which the reviewed slips must add up to exactly.
+    const remitted = slipsMode ? sub.expectedSatang : sub.totalSatang;
     // The ledger now must still be what was sent (a sale reversed meanwhile changes it: return it).
     const owed = await heldOn(tx, s.guideId, s.sourceJobSheetId);
-    if (owed !== sub.totalSatang) refuse(409, "LEDGER_CHANGED", `${thb(owed)} is owed now, not ${thb(sub.totalSatang)} — return the hand-in`);
+    if (owed !== remitted) refuse(409, "LEDGER_CHANGED", `${thb(owed)} is owed now, not ${thb(remitted)} — return the hand-in`);
     const now = new Date();
-    const moved = await tx.cashSettlementTransfer.updateMany({ where: { id: { in: sub.transferIds }, settlementId: s.id, status: "REPORTED" }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now } });
-    if (moved.count !== sub.transferIds.length) refuse(409, "STALE", "A transfer of this submission changed — reload");
-    await tx.cashCustodyEntry.create({ data: { custodianId: s.guideId, sourceJobSheetId: s.sourceJobSheetId, kind: "REMITTED", amountSatang: -sub.totalSatang, settlementId: s.id,
+    let transferIds = sub.transferIds;
+    if (slipsMode) transferIds = await transfersFromSlips(tx, admin, s, sub, new Map((input.slips ?? []).map((x) => [String(x.id), Number(x.reviewVersion)])));
+    const moved = await tx.cashSettlementTransfer.updateMany({ where: { id: { in: transferIds }, settlementId: s.id, status: "REPORTED" }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now } });
+    if (moved.count !== transferIds.length) refuse(409, "STALE", "A transfer of this submission changed — reload");
+    await tx.cashCustodyEntry.create({ data: { custodianId: s.guideId, sourceJobSheetId: s.sourceJobSheetId, kind: "REMITTED", amountSatang: -remitted, settlementId: s.id,
       idempotencyKey: `REMITTED:${s.id}:${sub.submissionNo}`, createdById: admin.userId, note: `Hand-in ${s.settlementNo} submission ${sub.submissionNo}` } });
     await tx.cashSettlementSubmission.update({ where: { id: sub.id }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now } });
-    const confirmed = await tx.cashSettlement.update({ where: { id: s.id }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now } });
+    const confirmed = await tx.cashSettlement.update({ where: { id: s.id }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now, ...(slipsMode ? { remittedSatang: remitted } : {}) } });
     // Bank clearing: one event per actual Bangkok transfer date and receiving account — what one
     // daily journal on that bank account would hold — each line linked to its central transfer,
     // each transfer cleared into PEAK once. A transfer to an earlier account version clears to
     // that account, as reported.
-    const transfers = await tx.cashSettlementTransfer.findMany({ where: { id: { in: sub.transferIds } }, orderBy: { seq: "asc" } });
-    const links = await tx.bankTransactionUse.findMany({ where: { sourceTable: "CashSettlementTransfer", sourceId: { in: sub.transferIds }, live: true } });
+    const transfers = await tx.cashSettlementTransfer.findMany({ where: { id: { in: transferIds } }, orderBy: { seq: "asc" } });
+    const links = await tx.bankTransactionUse.findMany({ where: { sourceTable: "CashSettlementTransfer", sourceId: { in: transferIds }, live: true } });
     const txOf = new Map(links.map((l) => [l.sourceId, l.transactionId]));
     if (txOf.size !== transfers.length) refuse(409, "BANK_LINK", "A transfer is not in the bank registry — contact the developer");
     const jobRefNow = (await tx.jobSheet.findUnique({ where: { id: s.sourceJobSheetId }, select: { ref: true } }))?.ref ?? null;
@@ -285,9 +298,174 @@ export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId:
       });
     }
     await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: "ADMIN", action: "upsell.hand_in_confirmed", entityType: "CashSettlement", entityId: s.id,
-      detail: { settlementNo: s.settlementNo, submissionNo: sub.submissionNo, totalSatang: sub.totalSatang, transferIds: sub.transferIds } } });
+      detail: { settlementNo: s.settlementNo, submissionNo: sub.submissionNo, kind: sub.kind, totalSatang: remitted, transferIds, slipIds: sub.slipIds } } });
     return confirmed;
   });
+}
+
+// ── Slip-only hand-in (owner, 20 Nov 2026: "ให้อัพโหลดสลิปอย่างเดียวก็พอแล้ว") ─────────────────────
+//
+// The guide uploads the bank slip(s) and sends — nothing typed. A slip is unverified proof bound to
+// the job's hand-in; its amount, time and bank reference are recorded by an Admin from the slip and
+// the statement (never taken from the guide, the upload time, the owed amount, the memo or the file);
+// only Confirm turns reviewed slips into registered transfers, in the confirm transaction.
+
+/** Upload a slip to the job's hand-in (the code is made on the way if the guide has not got it yet). */
+export async function uploadHandInSlip(db: Db, guide: Guide, input: { jobSheetId: string; evidenceId: string }) {
+  const job = await guideJob(db, guide, input.jobSheetId);
+  const ev = await db.paymentEvidence.findUnique({ where: { id: input.evidenceId ?? "" }, select: { id: true, guideId: true, slipUploadedBy: true } });
+  if (!ev) refuse(400, "SLIP", "Upload the slip again");
+  if (ev!.slipUploadedBy !== guide.userId || (ev!.guideId && ev!.guideId !== guide.guideId)) refuse(403, "SLIP", "Upload your own slip");
+  return step(db, async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "JobSheet" WHERE "id" = ${job.id} FOR UPDATE`;
+    if ((await heldOn(tx, guide.guideId, job.id)) <= 0) refuse(409, "NOTHING_OWED", "No Extras cash is held on this job");
+    let s = await tx.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId: guide.guideId, sourceJobSheetId: job.id } } });
+    if (!s) {
+      s = await tx.cashSettlement.create({ data: { settlementNo: await nextUpsellDocNo("FOLK-CSH", new Date(), tx), guideId: guide.guideId, sourceJobSheetId: job.id, expectedSatang: 0, remittedSatang: 0, method: "BANK_TRANSFER", status: "DRAFT" } });
+      await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_prepared", entityType: "CashSettlement", entityId: s.id, detail: { settlementNo: s.settlementNo, jobRef: job.ref } } });
+    }
+    await tx.$queryRaw`SELECT "id" FROM "CashSettlement" WHERE "id" = ${s.id} FOR UPDATE`;
+    // The same file again (the same evidence: Drive dedupes by content) is the same slip.
+    const again = await tx.cashSettlementSlip.findUnique({ where: { evidenceId: ev!.id } });
+    if (again) {
+      if (again.settlementId !== s.id) refuse(409, "SLIP_USED", "This slip is already filed with another hand-in");
+      return { slip: again, replay: true, settlementNo: s.settlementNo };
+    }
+    if (await tx.cashSettlementTransfer.findFirst({ where: { evidenceId: ev!.id }, select: { id: true } })) refuse(409, "SLIP_USED", "This slip is already filed with a transfer");
+    const fresh = await tx.cashSettlement.findUniqueOrThrow({ where: { id: s.id } });
+    if (fresh.status !== "DRAFT" && fresh.status !== "RETURNED") refuse(409, "HAND_IN_SENT", fresh.status === "SUBMITTED" ? "The hand-in is with Admin — wait for it to be confirmed or returned" : "This job's hand-in is closed");
+    // The account the guide is shown to transfer to, frozen with the slip (never re-labelled later).
+    const shown = await currentReceivingAccount(tx);
+    if (!shown) refuse(409, "NO_RECEIVING_ACCOUNT", "The account for Extras cash is not set yet — ask Admin before transferring");
+    const last = await tx.cashSettlementSlip.aggregate({ where: { settlementId: s.id }, _max: { seq: true } });
+    const slip = await tx.cashSettlementSlip.create({ data: { settlementId: s.id, guideId: guide.guideId, seq: (last._max.seq ?? 0) + 1, evidenceId: ev!.id, uploadedById: guide.userId,
+      shownAccountId: shown!.id, shownAccountVersion: shown!.version, shownAccountKey: shown!.bankAccountKey, shownAccountDisplay: shown!.accountDisplay } });
+    await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_slip_uploaded", entityType: "CashSettlementSlip", entityId: slip.id, detail: { settlementNo: s.settlementNo, seq: slip.seq } } });
+    return { slip, replay: false, settlementNo: s.settlementNo };
+  });
+}
+
+/** Take a slip out (the wrong one) while the hand-in is with the guide. It stays in the history. */
+export async function removeHandInSlip(db: Db, guide: Guide, input: { slipId: string; reason: string }) {
+  const reason = (input.reason ?? "").trim();
+  if (reason.length < 5) refuse(400, "REASON", "Say why this slip comes out");
+  return step(db, async (tx) => {
+    const sl = await tx.cashSettlementSlip.findUnique({ where: { id: input.slipId } });
+    if (!sl || sl.guideId !== guide.guideId) refuse(404, "NO_SLIP", "No such slip");
+    await tx.$queryRaw`SELECT "id" FROM "CashSettlement" WHERE "id" = ${sl!.settlementId} FOR UPDATE`;
+    const st = await tx.cashSettlement.findUniqueOrThrow({ where: { id: sl!.settlementId } });
+    if (st.status !== "DRAFT" && st.status !== "RETURNED") refuse(409, "HAND_IN_SENT", "The hand-in is with Admin or closed");
+    if (sl!.status !== "ACTIVE") return { slip: sl!, replay: true };
+    const slip = await tx.cashSettlementSlip.update({ where: { id: sl!.id }, data: { status: "REMOVED", removedReason: reason, removedById: guide.userId, removedAt: new Date() } });
+    await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_slip_removed", entityType: "CashSettlementSlip", entityId: slip.id, detail: { settlementNo: st.settlementNo, seq: slip.seq, reason } } });
+    return { slip, replay: false };
+  });
+}
+
+/** Send the slips: what is owed now (frozen with the sales it covers) and which slips — nothing claimed transferred. */
+export async function submitHandInSlips(db: Db, guide: Guide, input: { jobSheetId: string; slipIds: string[] }) {
+  const job = await guideJob(db, guide, input.jobSheetId);
+  return step(db, async (tx) => {
+    const [s] = await tx.$queryRaw<{ id: string; status: string; submissionNo: number }[]>`SELECT "id", "status", "submissionNo" FROM "CashSettlement" WHERE "guideId" = ${guide.guideId} AND "sourceJobSheetId" = ${job.id} FOR UPDATE`;
+    if (!s) refuse(409, "NO_SLIPS", "Upload the slip(s) of your transfer first");
+    const ids = [...new Set(input.slipIds ?? [])].sort();
+    if (s.status === "SUBMITTED") {
+      const cur = await tx.cashSettlementSubmission.findUnique({ where: { settlementId_submissionNo: { settlementId: s.id, submissionNo: s.submissionNo } } });
+      if (cur?.kind === "SLIPS" && [...cur.slipIds].sort().join() === ids.join()) return { settlement: await tx.cashSettlement.findUniqueOrThrow({ where: { id: s.id } }), submission: cur, replay: true };
+      refuse(409, "HAND_IN_SENT", "The hand-in is with Admin — wait for it to be confirmed or returned");
+    }
+    if (s.status !== "DRAFT" && s.status !== "RETURNED") refuse(409, "HAND_IN_SENT", "This job's hand-in is closed");
+    if (await tx.cashSettlementTransfer.count({ where: { settlementId: s.id, status: "REPORTED" } })) refuse(409, "TRANSFERS_REPORTED", "Transfers were reported for this hand-in the earlier way — send those, or ask Admin");
+    const active = await tx.cashSettlementSlip.findMany({ where: { settlementId: s.id, status: "ACTIVE" }, select: { id: true } });
+    if (!active.length) refuse(409, "NO_SLIPS", "Upload the slip(s) of your transfer first");
+    if (active.map((x) => x.id).sort().join() !== ids.join()) refuse(409, "STALE", "The slips changed — reload and check them");
+    const owed = await heldOn(tx, guide.guideId, job.id);
+    if (owed <= 0) refuse(409, "NOTHING_OWED", "No Extras cash is owed on this job");
+    const coverage = covered(await coverageOf(tx, guide.guideId, job.id));
+    const coveredSatang = coverage.reduce((n, c) => n + c.heldSatang, 0);
+    if (coveredSatang !== owed) refuse(409, "COVERAGE_MISMATCH", `The sales held add up to ${thb(coveredSatang)} but ${thb(owed)} is owed — contact Admin`);
+    const sent = await tx.cashSettlement.update({ where: { id: s.id }, data: { status: "SUBMITTED", method: "BANK_TRANSFER", expectedSatang: owed, remittedSatang: 0 } });
+    const submission = await tx.cashSettlementSubmission.create({ data: { settlementId: s.id, submissionNo: sent.submissionNo, kind: "SLIPS", expectedSatang: owed, totalSatang: 0, transferIds: [], slipIds: ids,
+      coverage: coverage as unknown as Prisma.InputJsonValue, submittedById: guide.userId } });
+    await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_sent", entityType: "CashSettlement", entityId: s.id,
+      detail: { settlementNo: sent.settlementNo, submissionNo: sent.submissionNo, kind: "SLIPS", owedSatang: owed, slips: ids.length } } });
+    return { settlement: sent, submission, replay: false };
+  });
+}
+
+/**
+ * The Admin records what a slip (and the statement) actually shows: the amount, when the bank sent
+ * it, its bank reference — and which company account it was paid INTO, chosen from the known account
+ * versions (the one the guide was shown is the default; a retired one stays valid) and explicitly
+ * verified against the slip. The screen sends the submission and review version it saw, so an older
+ * screen can never overwrite a newer review or a later submission. Re-recording is audited with the
+ * earlier facts. Checked against the bank registry now and again at Confirm.
+ */
+export async function reviewHandInSlip(db: Db, admin: Admin, input: { slipId: string; submissionNo: number; reviewVersion: number; amountSatang: number; transferredAt: string; bankRef: string; receivingAccountId: string; recipientVerified: boolean }) {
+  if (!Number.isInteger(input.amountSatang) || input.amountSatang <= 0) refuse(400, "AMOUNT", "Enter the amount on the slip");
+  const at = new Date(input.transferredAt);
+  if (Number.isNaN(at.getTime()) || at.getTime() > Date.now() + 60_000) refuse(400, "TRANSFER_TIME", "Enter the date and time on the slip — not in the future");
+  const ref = (input.bankRef ?? "").trim();
+  if (!ref || !folkKey(ref)) refuse(400, "BANK_REF", "Enter the bank's transaction reference from the slip");
+  if (input.recipientVerified !== true) refuse(400, "RECIPIENT", "Check the slip's recipient is this company account — if it is not, return the hand-in");
+  if (!Number.isInteger(input.submissionNo) || !Number.isInteger(input.reviewVersion)) refuse(409, "STALE", "Reload the hand-in");
+  return step(db, async (tx) => {
+    await requireAdmin(tx, admin);
+    const first = await tx.cashSettlementSlip.findUnique({ where: { id: input.slipId }, select: { settlementId: true } });
+    if (!first) refuse(404, "NO_SLIP", "No such slip");
+    const { s: st, sub } = await lockSubmitted(tx, first!.settlementId, input.submissionNo);
+    // Read again under the lock: what the screen saw must still be what is there.
+    const sl = (await tx.cashSettlementSlip.findUnique({ where: { id: input.slipId } }))!;
+    if (sub.kind !== "SLIPS" || !sub.slipIds.includes(sl.id) || sl.status !== "ACTIVE") refuse(409, "NOT_WITH_ADMIN", "This slip is not in a hand-in waiting for Admin");
+    if (sl.reviewVersion !== input.reviewVersion) refuse(409, "STALE_REVIEW", "Another Admin changed this slip's review — reload");
+    if (folkKey(ref) === folkKey(st.settlementNo)) refuse(400, "MEMO_AS_REF", "That is the hand-in code (the memo) — enter the bank's own transaction reference");
+    const account = await tx.upsellReceivingAccount.findUnique({ where: { id: input.receivingAccountId ?? "" } });
+    if (!account) refuse(400, "RECIPIENT", "Choose the company account the slip shows it was paid into — if none, return the hand-in");
+    // The same bank reference on another slip of this hand-in is one transfer, not two.
+    const others = await tx.cashSettlementSlip.findMany({ where: { settlementId: st.id, id: { not: sl.id }, status: "ACTIVE", bankRef: { not: null } }, select: { bankRef: true, seq: true } });
+    const dup = others.find((o) => folkKey(o.bankRef) === folkKey(ref));
+    if (dup) refuse(409, "BANK_REF_TWICE", `Slip ${dup.seq} already has this bank reference — one transfer is one slip`);
+    const used = await bankTxPrecheck(tx, { direction: "IN", ref, amountSatang: input.amountSatang, account: account!.bankAccountKey });
+    if (used) refuse(409, "BANK_TRANSFER_USED", used);
+    const facts = (x: typeof sl) => x.reviewedAt ? { reviewVersion: x.reviewVersion, amountSatang: x.amountSatang, transferredAt: x.transferredAt?.toISOString(), bankRef: x.bankRef,
+      receivingAccountId: x.receivingAccountId, receivingAccountVersion: x.receivingAccountVersion, toAccount: x.receivingAccountDisplay, reviewedById: x.reviewedById, reviewedAt: x.reviewedAt.toISOString() } : null;
+    const slip = await tx.cashSettlementSlip.update({ where: { id: sl.id }, data: {
+      amountSatang: input.amountSatang, transferredAt: at, transferDate: bangkokDate(at), bankRef: ref,
+      receivingAccountId: account!.id, receivingAccountVersion: account!.version, receivingAccountKey: account!.bankAccountKey, receivingAccountDisplay: account!.accountDisplay,
+      recipientVerified: true, reviewVersion: sl.reviewVersion + 1, reviewedById: admin.userId, reviewedAt: new Date() } });
+    await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: "ADMIN", action: "upsell.hand_in_slip_reviewed", entityType: "CashSettlementSlip", entityId: slip.id,
+      detail: { settlementNo: st.settlementNo, submissionNo: sub.submissionNo, seq: slip.seq, source: "ADMIN_FROM_SLIP",
+        shownAccount: { id: sl.shownAccountId, version: sl.shownAccountVersion, display: sl.shownAccountDisplay }, recipientDiffersFromShown: account!.id !== sl.shownAccountId,
+        before: facts(sl), after: facts(slip) } } });
+    return slip;
+  });
+}
+
+/** At Confirm (inside its transaction): every slip reviewed, to the account in use, adding up to what was owed as sent → registered transfers. */
+async function transfersFromSlips(tx: Tx, admin: Admin, s: { id: string; guideId: string; settlementNo: string }, sub: { slipIds: string[]; expectedSatang: number }, seen: Map<string, number>): Promise<string[]> {
+  const slips = await tx.cashSettlementSlip.findMany({ where: { id: { in: sub.slipIds } }, orderBy: { seq: "asc" } });
+  if (slips.length !== sub.slipIds.length || slips.some((x) => x.status !== "ACTIVE")) refuse(409, "STALE", "A slip of this submission changed — reload");
+  if (slips.some((x) => !x.reviewedAt || !x.recipientVerified)) refuse(409, "NOT_REVIEWED", "Record the amount, time, bank reference and recipient of every slip first");
+  // Confirm exactly the reviews this screen ticked — never facts another Admin changed after the tick.
+  if (slips.some((x) => seen.get(x.id) !== x.reviewVersion)) refuse(409, "STALE_REVIEW", "A slip's review changed since you ticked it — reload and check it again");
+  // The account each slip was reviewed as paid into is kept as is, even if the default account changed since.
+  const total = slips.reduce((n, x) => n + (x.amountSatang ?? 0), 0);
+  if (total !== sub.expectedSatang) refuse(409, total < sub.expectedSatang ? "SHORT" : "OVER", `The slips add up to ${thb(total)}; ${thb(sub.expectedSatang)} is owed — return it to the guide with the reason`);
+  const last = await tx.cashSettlementTransfer.aggregate({ where: { settlementId: s.id }, _max: { seq: true } });
+  let seq = last._max.seq ?? 0;
+  const ids: string[] = [];
+  for (const x of slips) {
+    const used = await bankTxPrecheck(tx, { direction: "IN", ref: x.bankRef!, amountSatang: x.amountSatang!, account: x.receivingAccountKey! });
+    if (used) refuse(409, "BANK_TRANSFER_USED", `Slip ${x.seq}: ${used}`);
+    const ev = await tx.paymentEvidence.findUnique({ where: { id: x.evidenceId }, select: { driveLink: true } });
+    const t = await tx.cashSettlementTransfer.create({ data: {
+      settlementId: s.id, guideId: s.guideId, seq: ++seq, amountSatang: x.amountSatang!, transferredAt: x.transferredAt!, transferDate: x.transferDate!, bankRef: x.bankRef!,
+      slipUrl: ev?.driveLink ?? null, evidenceId: x.evidenceId, receivingAccountId: x.receivingAccountId!, receivingAccountKey: x.receivingAccountKey!, receivingAccountDisplay: x.receivingAccountDisplay!,
+      reportedById: admin.userId, requestKey: `slip:${x.id}`, slipId: x.id } });
+    await tx.cashSettlementSlip.update({ where: { id: x.id }, data: { transferId: t.id } });
+    ids.push(t.id);
+  }
+  return ids;
 }
 
 /** Return the submission for checking: nothing is received or refused; the transfers stay recorded. */
@@ -469,14 +647,19 @@ export async function listHandIns(db: Db, opts: { status?: string[] } = {}) {
   const rows = await db.cashSettlement.findMany({
     where: opts.status?.length ? { status: { in: opts.status } } : { status: { not: "DRAFT" } },
     orderBy: [{ updatedAt: "desc" }], take: 200,
-    include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "desc" }, take: 1 }, sourceJobSheet: { select: { ref: true, date: true } } },
+    include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "desc" }, take: 1 }, sourceJobSheet: { select: { ref: true, date: true } },
+      slips: { orderBy: { seq: "asc" }, include: { evidence: { select: { driveLink: true } } } } },
   });
   return Promise.all(rows.map(async (s) => ({
     id: s.id, settlementNo: s.settlementNo, guideId: s.guideId, jobRef: s.sourceJobSheet.ref, jobDate: s.sourceJobSheet.date, status: s.status, submissionNo: s.submissionNo,
     returnedReason: s.returnedReason, owedSatang: await heldOn(db, s.guideId, s.sourceJobSheetId),
-    submission: s.submissions[0] ? { submissionNo: s.submissions[0].submissionNo, totalSatang: s.submissions[0].totalSatang, transferIds: s.submissions[0].transferIds, status: s.submissions[0].status,
+    submission: s.submissions[0] ? { submissionNo: s.submissions[0].submissionNo, kind: s.submissions[0].kind, expectedSatang: s.submissions[0].expectedSatang, slipIds: s.submissions[0].slipIds, totalSatang: s.submissions[0].totalSatang, transferIds: s.submissions[0].transferIds, status: s.submissions[0].status,
       saleRefs: (s.submissions[0].coverage as { saleNo: string }[]).map((c) => c.saleNo) } : null,
     transfers: s.transfers.map((t) => ({ id: t.id, seq: t.seq, amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), bankRef: t.bankRef, slipUrl: t.slipUrl, toAccount: t.receivingAccountDisplay, status: t.status, withdrawnReason: t.withdrawnReason })),
+    // Slips with what an Admin recorded from them (null until reviewed) — never a guess.
+    slips: s.slips.map((x) => ({ id: x.id, seq: x.seq, status: x.status, url: x.evidence.driveLink, uploadedAt: x.uploadedAt.toISOString(), removedReason: x.removedReason,
+      shownAccount: { id: x.shownAccountId, version: x.shownAccountVersion, display: x.shownAccountDisplay }, reviewVersion: x.reviewVersion,
+      reviewed: x.reviewedAt ? { amountSatang: x.amountSatang!, transferredAt: x.transferredAt!.toISOString(), bankRef: x.bankRef!, accountId: x.receivingAccountId!, accountVersion: x.receivingAccountVersion!, toAccount: x.receivingAccountDisplay!, reviewedAt: x.reviewedAt.toISOString() } : null, transferId: x.transferId })),
   })));
 }
 

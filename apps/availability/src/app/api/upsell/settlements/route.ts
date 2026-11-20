@@ -11,5 +11,7 @@ export async function GET(req: NextRequest) {
   if (a instanceof NextResponse) return a;
   const no = only(a, "ADMIN", "OPERATOR", "ACCOUNTANT"); if (no) return no;
   const status = (req.nextUrl.searchParams.get("status") ?? "").split(",").map((x) => x.trim()).filter(Boolean);
-  return NextResponse.json({ rows: await listHandIns(prisma, { status }), canDecide: a.role === "ADMIN" });
+  // The company's receiving account versions (retired ones too): a slip is reviewed as paid into one of them.
+  const accounts = (await prisma.upsellReceivingAccount.findMany({ orderBy: { version: "desc" } })).map((x) => ({ id: x.id, version: x.version, label: x.label, display: x.accountDisplay, retired: !!x.retiredAt }));
+  return NextResponse.json({ rows: await listHandIns(prisma, { status }), accounts, canDecide: a.role === "ADMIN" });
 }

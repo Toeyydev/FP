@@ -9,8 +9,11 @@ import OperatorNav from "@/components/OperatorNav";
 // of what is confirmed (submission no.), and the ledger, on every write.
 
 type Transfer = { id: string; seq: number; amountSatang: number; transferredAt: string; bankRef: string; slipUrl: string | null; toAccount: string; status: string; withdrawnReason: string | null };
+type Slip = { id: string; seq: number; status: string; url: string | null; uploadedAt: string; removedReason: string | null; shownAccount: { id: string; version: number; display: string }; reviewVersion: number;
+  reviewed: { amountSatang: number; transferredAt: string; bankRef: string; accountId: string; accountVersion: number; toAccount: string; reviewedAt: string } | null; transferId: string | null };
 type HandIn = { id: string; settlementNo: string; guideId: string; jobRef: string | null; jobDate: string; status: string; submissionNo: number; returnedReason: string | null; owedSatang: number;
-  submission: { submissionNo: number; totalSatang: number; transferIds: string[]; status: string; saleRefs: string[] } | null; transfers: Transfer[] };
+  submission: { submissionNo: number; kind: string; expectedSatang: number; slipIds: string[]; totalSatang: number; transferIds: string[]; status: string; saleRefs: string[] } | null; transfers: Transfer[]; slips: Slip[] };
+type KnownAccount = { id: string; version: number; label: string; display: string; retired: boolean };
 type Reversal = { id: string; kind: string; status: string; reason: string; saleNo: string; grossSatang: number; guideId: string; jobRef: string | null; guideAffirmationText: string | null; guideAffirmedAt: string | null; refundAmountSatang: number | null; refundPaidBy: string | null; refundEvidenceUrl: string | null; createdAt: string };
 type Account = { id: string; version: number; label: string; display: string; peakPaymentMethodName: string | null; confirmedAt: string; retiredAt: string | null };
 type Method = { id: string; name?: string | null; bankName?: string | null; accountNumber?: string | null };
@@ -31,6 +34,7 @@ const postJson = (url: string, body: unknown) => call(url, { method: "POST", hea
 
 export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
   const [handIns, setHandIns] = useState<HandIn[] | null>(null);
+  const [known, setKnown] = useState<KnownAccount[]>([]);
   const [reversals, setReversals] = useState<Reversal[]>([]);
   const [accounts, setAccounts] = useState<{ current: Account | null; versions: Account[] } | null>(null);
   const [vat, setVat] = useState<{ vatRegistration: string; vatRegistrationSource: string | null; status: string } | null>(null);
@@ -45,7 +49,7 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
       call("/api/upsell/receiving-account", { cache: "no-store" }).catch(() => null),
       call("/api/upsell/tax-profile/vat-registration", { cache: "no-store" }).catch(() => null),
     ]);
-    setHandIns(h.rows); setReversals(r.rows); setAccounts(a); setVat(v?.profile ?? null);
+    setHandIns(h.rows); setKnown(h.accounts ?? []); setReversals(r.rows); setAccounts(a); setVat(v?.profile ?? null);
   }, []);
   useEffect(() => { void load(); }, [load]);
   const done = async (m: string) => { setMsg(m); setConfirming(null); setReturning(null); await load(); };
@@ -69,11 +73,11 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
                     <tr key={h.id}>
                       <td style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5, wordBreak: "break-all" }}>{h.settlementNo}<div className="muted" style={{ fontFamily: "inherit" }}>submission {h.submissionNo}</div></td>
                       <td>{h.guideId}<div className="muted" style={{ fontSize: 12, wordBreak: "break-all" }}>{h.jobRef ?? h.jobDate}</div>{h.submission?.saleRefs.length ? <div className="muted" style={{ fontSize: 12, wordBreak: "break-all" }}>{h.submission.saleRefs.join(", ")}</div> : null}</td>
-                      <td style={{ minWidth: 220 }}>{h.transfers.map((t) => <div key={t.id} style={{ fontSize: 12.5, wordBreak: "break-word", opacity: t.status === "WITHDRAWN" ? 0.6 : 1 }}>{t.seq}. {baht(t.amountSatang)} · sent {when(t.transferredAt)} · {t.bankRef} · to {t.toAccount}{t.status === "WITHDRAWN" ? " · taken out" : ""}</div>)}</td>
+                      <td style={{ minWidth: 220 }}>{h.slips.filter((x) => x.status === "ACTIVE" && !x.transferId).length > 0 && <div className="js-slip-count" style={{ fontSize: 12.5 }}>{h.slips.filter((x) => x.status === "ACTIVE" && !x.transferId).length} slip(s) · {h.slips.filter((x) => x.status === "ACTIVE" && x.reviewed && !x.transferId).length} checked</div>}{h.transfers.map((t) => <div key={t.id} style={{ fontSize: 12.5, wordBreak: "break-word", opacity: t.status === "WITHDRAWN" ? 0.6 : 1 }}>{t.seq}. {baht(t.amountSatang)} · sent {when(t.transferredAt)} · {t.bankRef} · to {t.toAccount}{t.status === "WITHDRAWN" ? " · taken out" : ""}</div>)}</td>
                       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>{baht(h.owedSatang)}</td>
                       <td style={{ whiteSpace: "normal" }}>{STATUS[h.status] ?? h.status}{h.status === "RETURNED" && h.returnedReason ? <div className="muted" style={{ fontSize: 12 }}>“{h.returnedReason}”</div> : null}{h.status === "CONFIRMED" ? <div className="muted" style={{ fontSize: 12 }}>Locked — corrections after confirmation come later</div> : null}</td>
                       <td style={{ whiteSpace: "nowrap" }}>{isAdmin && h.status === "SUBMITTED" && <>
-                        <button className="btn sm primary js-confirm" onClick={() => setConfirming(h)}>Confirm…</button>{" "}
+                        <button className="btn sm primary js-confirm" onClick={() => setConfirming(h)}>{h.submission?.kind === "SLIPS" ? "Check slips…" : "Confirm…"}</button>{" "}
                         <button className="btn sm danger js-return" onClick={() => setReturning(h)}>Return…</button>
                       </>}</td>
                     </tr>
@@ -88,7 +92,9 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
         <AccountPanel accounts={accounts} isAdmin={isAdmin} onDone={done} />
         <VatPanel vat={vat} isAdmin={isAdmin} onDone={done} />
       </div>
-      {confirming && <ConfirmDialog h={confirming} onClose={() => setConfirming(null)} onDone={done} />}
+      {confirming && (confirming.submission?.kind === "SLIPS"
+        ? <SlipsDialog key={confirming.id} h={handIns?.find((x) => x.id === confirming.id) ?? confirming} known={known} onClose={() => setConfirming(null)} onDone={done} onReload={load} onReturn={() => { setReturning(confirming); setConfirming(null); }} />
+        : <ConfirmDialog h={confirming} onClose={() => setConfirming(null)} onDone={done} />)}
       {returning && <ReturnDialog h={returning} onClose={() => setReturning(null)} onDone={done} />}
     </div>
   );
@@ -126,6 +132,96 @@ function ConfirmDialog({ h, onClose, onDone }: { h: HandIn; onClose: () => void;
           {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
         </div>
         <div className="mfoot"><button className="btn sm" onClick={onClose} disabled={busy}>Cancel</button><button className="btn sm primary" onClick={() => void go()} disabled={busy || !all}>{busy ? "…" : `Confirm ${baht(sub.totalSatang)}`}</button></div>
+      </div>
+    </div>
+  );
+}
+
+// Slip-only hand-in: the Admin reads each slip (and the statement) and records what it actually
+// shows — amount, time, the bank's reference, and which company account it was paid into (the one
+// the guide was shown is the default; checked explicitly). The tick confirms exactly the review
+// version on screen: if another Admin changed a slip since, Confirm is refused — reload.
+const bkk = (iso: string) => new Date(new Date(iso).getTime() + 7 * 3600_000).toISOString();
+function SlipsDialog({ h, known, onClose, onDone, onReload, onReturn }: { h: HandIn; known: KnownAccount[]; onClose: () => void; onDone: (m: string) => Promise<void>; onReload: () => Promise<void>; onReturn: () => void }) {
+  const sub = h.submission!;
+  const slips = h.slips.filter((x) => sub.slipIds.includes(x.id));
+  const [ticked, setTicked] = useState<Map<string, number>>(new Map());
+  const [edit, setEdit] = useState<string | null>(slips.find((x) => !x.reviewed)?.id ?? null);
+  const [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const total = slips.reduce((n, x) => n + (x.reviewed?.amountSatang ?? 0), 0);
+  const allTicked = slips.every((x) => x.reviewed && ticked.get(x.id) === x.reviewVersion);
+  const exact = total === sub.expectedSatang;
+  const go = async () => {
+    setBusy(true); setErr("");
+    try { await postJson(`/api/upsell/settlements/${h.id}/confirm`, { submissionNo: sub.submissionNo, slips: slips.map((x) => ({ id: x.id, reviewVersion: ticked.get(x.id) })) }); await onDone(`${h.settlementNo} confirmed — ${baht(sub.expectedSatang)} received ✓`); }
+    catch (e) { setErr((e as Error).message); setBusy(false); }
+  };
+  return (
+    <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="modal js-slips-dialog" role="dialog" aria-modal="true" aria-labelledby="sl-h" style={{ width: "min(620px, 100%)" }}>
+        <h3 id="sl-h">Check the slips · {baht(sub.expectedSatang)} owed</h3>
+        <div className="mctx">{h.guideId} · {h.settlementNo} (the memo) · {h.jobRef ?? h.jobDate} · submission {sub.submissionNo} · owed now {baht(h.owedSatang)}</div>
+        <div className="mbody">
+          {slips.map((x) => (
+            <div key={x.id} className="js-slip" style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 10, display: "grid", gap: 6, fontSize: 13.5 }}>
+              <div style={{ wordBreak: "break-word" }}><b>Slip {x.seq}</b> · uploaded {when(x.uploadedAt)} · {x.url ? <a href={x.url} target="_blank" rel="noreferrer">open the slip</a> : "file on record"} · guide was shown {x.shownAccount.display} (v{x.shownAccount.version})</div>
+              {x.reviewed && edit !== x.id && (
+                <label style={{ display: "flex", gap: 10, alignItems: "flex-start", minHeight: 44 }}>
+                  <input type="checkbox" className="js-slip-tick" style={{ width: 20, height: 20, flex: "none", marginTop: 2 }} checked={ticked.get(x.id) === x.reviewVersion}
+                    onChange={(e) => setTicked((m) => { const n = new Map(m); if (e.target.checked) n.set(x.id, x.reviewVersion); else n.delete(x.id); return n; })} />
+                  <span style={{ wordBreak: "break-word" }}>On the statement: {baht(x.reviewed.amountSatang)} · <b>{when(x.reviewed.transferredAt)}</b> · ref {x.reviewed.bankRef} · into {x.reviewed.toAccount}{x.reviewed.accountId !== x.shownAccount.id ? " (not the account shown to the guide)" : ""}</span>
+                </label>
+              )}
+              {x.reviewed && edit !== x.id && <div><button className="btn sm" onClick={() => setEdit(x.id)}>Correct what was recorded…</button></div>}
+              {edit === x.id && <SlipReview h={h} slip={x} known={known} onSaved={async () => { setEdit(null); setTicked((m) => { const n = new Map(m); n.delete(x.id); return n; }); await onReload(); }} onCancel={() => setEdit(null)} />}
+            </div>
+          ))}
+          <div className="js-slip-total" style={{ fontWeight: 700 }}>Recorded from the slips: {baht(total)} of {baht(sub.expectedSatang)}</div>
+          {slips.every((x) => x.reviewed) && !exact && <div className="ob warn" role="status" style={{ display: "block", whiteSpace: "normal" }}>{total < sub.expectedSatang ? "Short" : "Over"} by {baht(Math.abs(total - sub.expectedSatang))} — this cannot be confirmed. Return it to the guide with the reason.</div>}
+          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Wrong account, a missing or unreadable slip, short or over: return it. One step on Confirm: the slips become recorded transfers, one remittance, the bank clearing queued — or nothing.</p>
+          {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
+        </div>
+        <div className="mfoot"><button className="btn sm" onClick={onClose} disabled={busy}>Close</button><button className="btn sm danger" onClick={onReturn} disabled={busy}>Return…</button><button className="btn sm primary js-slips-confirm" onClick={() => void go()} disabled={busy || !allTicked || !exact}>{busy ? "…" : `Confirm ${baht(sub.expectedSatang)}`}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function SlipReview({ h, slip, known, onSaved, onCancel }: { h: HandIn; slip: Slip; known: KnownAccount[]; onSaved: () => Promise<void>; onCancel: () => void }) {
+  const r = slip.reviewed;
+  const [f, setF] = useState({ amount: r ? String(r.amountSatang / 100) : "", date: r ? bkk(r.transferredAt).slice(0, 10) : "", time: r ? bkk(r.transferredAt).slice(11, 16) : "", ref: r?.bankRef ?? "",
+    accountId: r?.accountId ?? slip.shownAccount.id, verified: false });
+  const [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      await postJson(`/api/upsell/settlements/slips/${slip.id}/review`, { submissionNo: h.submission!.submissionNo, reviewVersion: slip.reviewVersion, amountSatang: Math.round(Number(f.amount) * 100),
+        transferredAt: new Date(`${f.date}T${f.time}:00+07:00`).toISOString(), bankRef: f.ref.trim(), receivingAccountId: f.accountId, recipientVerified: f.verified });
+      await onSaved();
+    } catch (e) { setErr((e as Error).message); setBusy(false); }
+  };
+  const acct = known.find((a) => a.id === f.accountId);
+  return (
+    <div className="js-slip-review" style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 6 }}>
+        <label className="fl">Amount on the slip (฿)<input aria-label="Amount on the slip" inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /></label>
+        <label className="fl">Bank reference<input aria-label="Bank reference" value={f.ref} onChange={(e) => setF({ ...f, ref: e.target.value })} /></label>
+        <label className="fl">Date on the slip<input aria-label="Date on the slip" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
+        <label className="fl">Time on the slip<input aria-label="Time on the slip" type="time" value={f.time} onChange={(e) => setF({ ...f, time: e.target.value })} /></label>
+      </div>
+      <label className="fl">Paid into (the recipient on the slip)
+        <select aria-label="Paid into" value={f.accountId} onChange={(e) => setF({ ...f, accountId: e.target.value, verified: false })}>
+          {known.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.display} · v{a.version}{a.retired ? " (retired)" : ""}{a.id === slip.shownAccount.id ? " — shown to the guide" : ""}</option>)}
+        </select>
+      </label>
+      <label style={{ display: "flex", gap: 10, alignItems: "flex-start", minHeight: 44 }}>
+        <input type="checkbox" className="js-recipient-ok" style={{ width: 20, height: 20, flex: "none", marginTop: 2 }} checked={f.verified} onChange={(e) => setF({ ...f, verified: e.target.checked })} />
+        <span>The slip’s recipient is {acct ? `${acct.label} · ${acct.display}` : "this account"}. Not a company account? Don’t record it — return the hand-in.</span>
+      </label>
+      {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {r && <button className="btn sm" onClick={onCancel} disabled={busy}>Cancel</button>}
+        <button className="btn sm primary js-slip-save" onClick={() => void save()} disabled={busy || !f.amount || !f.date || !f.time || !f.ref.trim() || !f.verified}>{busy ? "…" : "Save what the slip shows"}</button>
       </div>
     </div>
   );
