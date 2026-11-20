@@ -4,7 +4,7 @@
 //  • On a Three Temples job the guide sees the walk-in seat only — the Route Extension, sold on
 //    the palace tour, is not offered there (no charging for temples already included).
 //  • Manual walk-in: the guide sells a seat with no name → "Walk-in · <Sale Ref>" on the guest list,
-//    the payment acknowledgement and the official-receipt status (never "issued" before PEAK).
+//    the payment confirmation only (ยืนยันการชำระเงินเท่านั้น) — no receipt wording for the guest.
 //  • Guest QR: the guide makes a QR; its image decodes to exactly the bound URL. A guest with no
 //    account (own browser, 390 px) opens it, registers (WAITING — no seat, no money), the guide
 //    presses "Cash received", the guest's page turns PAID with the Sale Ref; the guest is on the
@@ -173,7 +173,7 @@ try {
   await guide.waitForSelector(".ups-confirmation", { timeout: 15000 });
   const conf = await text(guide, ".js-upsell");
   const manualNo = (await text(guide, ".ups-sale-ref")).trim();
-  check("the confirmation is a payment acknowledgement with the receipt's real status — never 'issued' before PEAK", /payment acknowledgement/i.test(conf) && /Official receipt: issued in PEAK once/.test(conf) && !/Official receipt issued/.test(conf) && /not VAT-registered/.test(conf), conf.slice(0, 300));
+  check("the guest sees a payment confirmation only — ยืนยันการชำระเงินเท่านั้น, no receipt wording", /Payment confirmation/.test(conf) && /ยืนยันการชำระเงินเท่านั้น/.test(conf) && !/receipt|tax invoice/i.test(conf), conf.slice(0, 300));
   check("the guest is on the job's guest list as 'Walk-in · <Sale Ref>'", (await guestRows(sheet.id)).some((r) => r.name === `Walk-in · ${manualNo}` && r.bookingNo === manualNo && r.bookedPax === 1));
   await shot(guide, "guide-manual-confirmed-390");
   await tap(guide, ".ups-back");

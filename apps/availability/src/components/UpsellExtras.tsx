@@ -18,9 +18,9 @@ import WalkInGuestQr from "@/components/WalkInGuestQr";
 // tour): a Route Extension added to the guest's own tour, and a walk-in seat — a new guest
 // joining the whole tour (approved mockup pr4w). They never appear as one another.
 //
-// What the guest is shown is a payment acknowledgement, never called the official receipt: the
-// company's official receipt is issued in PEAK, and the block says where that stands (issued,
-// being issued, waiting for set-up). No tax invoice — the company is not VAT-registered.
+// What the guest is shown is a payment confirmation only — "ยืนยันการชำระเงินเท่านั้น" (owner,
+// 20 Nov 2026): the official receipt lives in PEAK, so the guest's screen does not mention receipts.
+// The guide's sale list shows a short PEAK sync status.
 
 type Kind = "ROUTE_EXTENSION" | "WALK_IN";
 type GuestRow = { bookingId: string; name: string; bookingRef: string; pax: number; remaining: number; state: "SELLABLE" | "ALREADY_BOUGHT" | "NO_SHOW"; reason: string | null; product: string; rate: string; fingerprint: string };
@@ -48,12 +48,12 @@ const at = (iso: string) => new Date(iso).toLocaleString("en-GB", { timeZone: "A
 const time = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" });
 const per = (basis: string) => (basis === "PER_GROUP" ? "per group" : "per guest");
 const totalOf = (p: Product, guests: number) => (p.pricingBasis === "PER_GROUP" ? p.unitPriceSatang : p.unitPriceSatang * guests);
-/** Where the company's official receipt stands — the guide's words, never "issued" before PEAK has it. */
-const receiptLine = (r: Receipt) => r.state === "SYNCED" ? `Official receipt issued in PEAK · ${r.peakCode}`
-  : r.state === "QUEUED" ? "Official receipt: being issued in PEAK"
-  : r.state === "CHECKING" ? "Official receipt: being checked by the office"
-  : r.state === "WAITING" ? "Official receipt: issued in PEAK once the office finishes its set-up"
-  : "No official receipt for this sale";
+/** The sale's PEAK sync status, short, for the guide's own list (never shown to the guest). */
+const peakLine = (r: Receipt) => r.state === "SYNCED" ? `PEAK: synced · ${r.peakCode}`
+  : r.state === "QUEUED" ? "PEAK: queued"
+  : r.state === "CHECKING" ? "PEAK: being checked"
+  : r.state === "WAITING" ? "PEAK: waiting for set-up"
+  : "";
 const walkInName = (p: { kind: Kind }) => p.kind === "WALK_IN";
 const STATUS: Record<string, string> = {
   NOT_SENT: "Not sent yet", DRAFT: "Not sent yet", SUBMITTED: "Sent — waiting for Admin", RETURNED: "Returned — send again", CONFIRMED: "Confirmed", REVERSED: "Reversed",
@@ -207,7 +207,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       </div>
       <div className="ups-confirmation" aria-labelledby="ups-h" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
         <div>
-          <div style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: C.brand, fontWeight: 700 }}>Folkpaths · payment acknowledgement</div>
+          <div style={{ fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: C.brand, fontWeight: 700 }}>Folkpaths · Payment confirmation</div>
           {heading(s.productName)}
         </div>
         <div>
@@ -223,11 +223,10 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
         <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10, fontSize: 12.5, color: C.soft, display: "flex", flexDirection: "column", gap: 4 }}>
           <span className="ups-job-ref">Job Ref {s.jobRef ?? "—"}</span>
           {s.kind === "WALK_IN" && <span className="ups-walkin-added">Added to this job’s guest list · เพิ่มในรายชื่อแขกของงานนี้แล้ว</span>}
-          <span className="ups-receipt-state">{receiptLine(s.receipt)}</span>
-          <span>This acknowledges the cash paid to Folkpaths; it is not the official receipt. No tax invoice — Folkpaths is not VAT-registered.<br />ยืนยันการรับชำระเงินเท่านั้น ใบเสร็จรับเงินฉบับทางการออกจากระบบ PEAK ของบริษัท</span>
+          <span className="ups-confirmation-only">ยืนยันการชำระเงินเท่านั้น · Payment confirmation only</span>
         </div>
       </div>
-      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>Show this payment acknowledgement to the guest. The Sale Ref and Job Ref are made by the system — nothing here can be typed or changed.</p>
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>Show this payment confirmation to the guest. The Sale Ref and Job Ref are made by the system — nothing here can be typed or changed.</p>
       <button type="button" className="ups-back" onClick={() => setView({ kind: "block" })} style={btn(true)}>Back to the job</button>
       <p style={{ margin: 0, fontSize: 12.5, color: C.soft }}>Recorded the wrong number? Tell the operator — a recorded sale can’t be deleted from your phone.</p>
     </>);
@@ -321,7 +320,7 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
       <ul className="ups-sales" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
         {x.sales.map((s) => (
           <li key={s.saleNo} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 10, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
-            <span><b>{s.kind === "WALK_IN" ? "Walk-in seat" : s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}{s.status === "REVERSED" ? " · reversed" : ""}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small>{(s.allocations ?? []).length > 0 && <><br /><small className="ups-sale-guests" style={{ color: C.soft }}>{s.allocations!.map((a) => `${a.name || "Guest"} (${a.bookingRef}) × ${a.guests}${a.status === "RELEASED" ? " · reversed" : ""}`).join(" · ")}</small></>}<br /><small className="ups-sale-receipt" style={{ color: C.soft }}>{receiptLine(s.receipt)}</small></span>
+            <span><b>{s.kind === "WALK_IN" ? "Walk-in seat" : s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}{s.status === "REVERSED" ? " · reversed" : ""}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small>{(s.allocations ?? []).length > 0 && <><br /><small className="ups-sale-guests" style={{ color: C.soft }}>{s.allocations!.map((a) => `${a.name || "Guest"} (${a.bookingRef}) × ${a.guests}${a.status === "RELEASED" ? " · reversed" : ""}`).join(" · ")}</small></>}{peakLine(s.receipt) && <><br /><small className="ups-sale-peak" style={{ color: C.soft }}>{peakLine(s.receipt)}</small></>}</span>
             <b>{baht(s.grossSatang)}</b>
             {(x.cash.status === "NOT_SENT" || x.cash.status === "DRAFT" || x.cash.status === "RETURNED") && <ErrorReversal saleNo={s.saleNo} />}
           </li>

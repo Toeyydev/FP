@@ -278,7 +278,7 @@ try {
   check("the sale names its guests: 2 from E2E-BK-A, 1 from E2E-BK-B, with the button's words, the guide and the time", JSON.stringify(allocs.map((a) => [a.bookingRef, a.guests])) === JSON.stringify([["E2E-BK-A", 2], ["E2E-BK-B", 1]])
     && allocs.every((a) => a.cashAckText === "ยืนยันเก็บเงินแล้ว ฿600 · Cash received" && !!a.cashAckById && !!a.cashAckAt), JSON.stringify(allocs.map((a) => [a.bookingRef, a.guests, a.cashAckText])));
   check("the confirmation lists each booking's guests", t.includes("Invented Guest A") && t.includes("E2E-BK-A") && t.includes("2 × ฿200") && t.includes("Invented Guest B"));
-  check("the payment acknowledgement shows the Sale Ref and Job Ref the system made", t.toLowerCase().includes("folkpaths · payment acknowledgement"));
+  check("the payment confirmation shows the Sale Ref and Job Ref the system made", t.includes("Folkpaths · Payment confirmation".toUpperCase()) || t.includes("Folkpaths · Payment confirmation"));
   const saleRef = await page.$eval(".ups-sale-ref", (e) => e.textContent);
   const jobRef = await page.$eval(".ups-job-ref", (e) => e.textContent);
   const sheet = await prisma.jobSheet.findFirstOrThrow({ where: { guideId: GUIDE_ID } });
@@ -287,8 +287,9 @@ try {
   check("the refs are read only — no field on the confirmation", await page.evaluate(() => !document.querySelector(".ups-confirmation input, .ups-confirmation textarea, .ups-confirmation select")));
   // Codex 20 Nov (pr4q #6): an acknowledgement, never called the official receipt; the official
   // receipt is described by its PEAK status and never said to be issued before PEAK has it.
-  check("it acknowledges the cash, says it is not the official receipt, gives the receipt's real status, no tax invoice",
-    t.includes("it is not the official receipt") && t.includes("No tax invoice") && /Official receipt: issued in PEAK once the office finishes its set-up/.test(t) && !/Official receipt issued/.test(t));
+  // Owner, 20 Nov 2026: "ยืนยันการชำระเงินเท่านั้น" — the receipt lives in PEAK, so no receipt wording for the guest.
+  check("it says ยืนยันการชำระเงินเท่านั้น and nothing about receipts or tax invoices",
+    t.includes("ยืนยันการชำระเงินเท่านั้น") && !/receipt|tax invoice|ใบเสร็จ|ใบกำกับ/i.test(t));
   const fc = await fits(page); check("390px payment confirmation fits", fc.over <= 1, fc.culprits.join(" "));
   const cc = await collisions(page); check("390px confirmation rows: no label overlaps or is squeezed", cc.length === 0, cc.join("; "));
   const ac = await a11y(page); check("payment confirmation accessibility", ac.length === 0, ac.join("; "));
