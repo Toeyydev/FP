@@ -265,9 +265,17 @@ try {
   await fill(owed / 100);
   await desk.click(".js-recipient-ok");
   await desk.click(".js-slip-save");
-  await desk.waitForSelector(".js-slip-tick", { timeout: 10000 });
+  // The first round's (short) review leaves a tick in the dialog, so ".js-slip-tick" alone is
+  // already there before this save lands. Wait for the corrected review itself: the shortfall
+  // gone and an unticked tick — then tick it and wait for Confirm to come on before pressing it.
+  await desk.waitForFunction(() => {
+    const d = document.querySelector(".js-slips-dialog");
+    const tick = d?.querySelector(".js-slip-tick");
+    return !!d && !/Short by/.test(d.textContent ?? "") && !!tick && !tick.checked && !tick.disabled;
+  }, { timeout: 10000 });
   const disabledFirst = await desk.$eval(".js-slips-confirm", (b) => b.disabled);
   await desk.click(".js-slip-tick");
+  await desk.waitForFunction(() => document.querySelector(".js-slips-confirm")?.disabled === false, { timeout: 10000 });
   await shot(desk, "admin-slip-verified-390");
   await desk.click(".js-slips-confirm");
   await desk.waitForFunction(() => /Confirmed/.test(document.querySelector(".js-handins")?.textContent ?? ""), { timeout: 10000 });
