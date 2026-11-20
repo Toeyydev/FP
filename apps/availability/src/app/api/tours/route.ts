@@ -3,22 +3,31 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import type { Prisma } from "@prisma/client";
+import { productsListingTour } from "@/lib/upsell/products";
 
 const ops = (r?: string) => r === "OPERATOR" || r === "ADMIN";
 
-// Tables that carry a tourId — kept in sync when two tours are merged.
-async function remapTour(fromId: string, toId: string) {
-  await prisma.$transaction([
-    prisma.assignment.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.jobOffer.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.booking.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.jobSheet.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.checkin.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.tourReport.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.guideRating.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-    prisma.productMap.updateMany({ where: { tourId: fromId }, data: { tourId: toId } }),
-  ]);
+// Tables that carry a tourId — kept in sync when two tours are merged. Run inside the merge's
+// own transaction, so a merge the database refuses (the tour is an upsell product's eligible
+// tour — trigger tour_upsell_eligibility_guard) moves nothing.
+async function remapTour(tx: Prisma.TransactionClient, fromId: string, toId: string) {
+  await tx.assignment.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.jobOffer.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.booking.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.jobSheet.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.checkin.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.tourReport.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.guideRating.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
+  await tx.productMap.updateMany({ where: { tourId: fromId }, data: { tourId: toId } });
 }
+
+/** The database's refusal to remove a tour an upsell product lists (it may land between our own
+ *  check and the delete, when an Admin ticks the tour at the same moment). */
+const tourInUse = (e: unknown) => {
+  const m = /UPSELL_TOUR_IN_USE: ([^\n"]+)/.exec(e instanceof Error ? e.message : String(e));
+  return m ? NextResponse.json({ error: "upsell-eligible", message: m[1].trim() }, { status: 409 }) : null;
+};
 
 export async function GET() {
   const session = await auth();
@@ -67,8 +76,17 @@ export async function POST(req: NextRequest) {
     if (!p.success || p.data.fromId === p.data.toId) return NextResponse.json({ error: "bad-body" }, { status: 400 });
     const [from, to] = await Promise.all([prisma.tour.findUnique({ where: { id: p.data.fromId } }), prisma.tour.findUnique({ where: { id: p.data.toId } })]);
     if (!from || !to) return NextResponse.json({ error: "no-tour" }, { status: 404 });
-    await remapTour(p.data.fromId, p.data.toId);
-    await prisma.tour.delete({ where: { id: p.data.fromId } });
+    const upsell = await productsListingTour(prisma, p.data.fromId);
+    if (upsell.length) return NextResponse.json({ error: "upsell-eligible", message: `${p.data.fromId} is an eligible tour of ${upsell.join(", ")} — remove it in Upsell settings first.` }, { status: 409 });
+    try {
+      await prisma.$transaction(async (tx) => {
+        await remapTour(tx, p.data.fromId, p.data.toId);
+        await tx.tour.delete({ where: { id: p.data.fromId } });
+      }, { timeout: 20_000, maxWait: 5_000 });
+    } catch (e) {
+      const r = tourInUse(e); if (r) return r;
+      throw e;
+    }
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "tour.merged", entityType: "Tour", entityId: p.data.fromId, detail: { into: p.data.toId } });
     return NextResponse.json({ ok: true });
   }
@@ -81,7 +99,12 @@ export async function POST(req: NextRequest) {
       prisma.assignment.count({ where: { tourId: p.data.id } }),
     ]);
     if (bk > 0 || asg > 0) return NextResponse.json({ error: "in-use", message: "This tour still has bookings or assignments — merge it into another tour instead." }, { status: 409 });
-    await prisma.tour.delete({ where: { id: p.data.id } });
+    const upsell = await productsListingTour(prisma, p.data.id);
+    if (upsell.length) return NextResponse.json({ error: "upsell-eligible", message: `${p.data.id} is an eligible tour of ${upsell.join(", ")} — remove it in Upsell settings first.` }, { status: 409 });
+    try { await prisma.tour.delete({ where: { id: p.data.id } }); } catch (e) {
+      const r = tourInUse(e); if (r) return r;
+      throw e;
+    }
     await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "tour.deleted", entityType: "Tour", entityId: p.data.id });
     return NextResponse.json({ ok: true });
   }

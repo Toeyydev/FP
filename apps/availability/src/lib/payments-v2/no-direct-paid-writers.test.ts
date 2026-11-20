@@ -77,6 +77,9 @@ describe("repository invariant — only payments-v2 can make a job PAID", () => 
       "lib/peak-payment-document.ts",
       // Document status, plus lock/stamp queries on already-paid jobs.
       "lib/peak-payment-server.ts",
+      // An upsell sale's own status (the guest paid the guide in cash for an extra), never a
+      // job's or a guide payment's.
+      "lib/upsell/sales.ts",
     ]);
   });
 

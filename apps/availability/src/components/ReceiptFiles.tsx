@@ -7,7 +7,7 @@ import { NO_RECEIPT_REASONS_TH } from "@/lib/expense-attachments/no-receipt-row"
 // with "+ Add" for several at once. Each file shows Uploading… / Failed · Retry while it
 // goes. The server decides who may add or remove (lib/expense-attachments/service).
 
-export type AttachmentView = { id: string; rowId: string; name: string; mime: string; size: number; link: string | null; uploadedAt: string; uploadedByRole: string | null; mine: boolean; removable: boolean };
+export type AttachmentView = { id: string; rowId: string; name: string; mime: string; size: number; link: string | null; uploadedAt: string; uploadedByRole: string | null; mine: boolean; removable: boolean; reviewStatus?: string; reviewNote?: string | null };
 type Row = { rowId?: string; description?: string; receiptUrl?: string | null; receiptName?: string | null; noReceipt?: { reason?: string } | null };
 type Pending = { key: string; name: string; state: "uploading" | "failed"; hint?: string; file: File };
 export type ReceiptChange = { sheet?: unknown; attachments?: Record<string, AttachmentView[]> };

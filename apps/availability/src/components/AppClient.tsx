@@ -1,5 +1,7 @@
 "use client";
 
+import { FIXED_ITEMS } from "@/lib/guide-fixed-expenses";
+import { DEFAULT_EXPENSES } from "@/lib/jobsheet";
 import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -703,9 +705,10 @@ export default function AppClient({
 
   function openReport(s: { date: string; slotIdx: number; tourName: string; pax: number | null }) {
     setRNoShow("0"); setRLeft("0"); setRComment(""); setReportBookings([]); setNoShowCounts({});
-    // One blank line to start, with the pax count prefilled — most lines are a
-    // per-head ticket, and retyping the group size on every row is the tedious part.
-    setRExp([{ description: "", price: "", pax: String(s.pax ?? "") }]); setRNoExp(false); setRExpNote(""); setRBusy(false);
+    // The three fixed items (owner 2026-11-15, lib/guide-fixed-expenses): Water / Bus / Ferry
+    // (Inc. Guide), quantity prefilled with the group plus the guide. 0 / empty = not used.
+    setRExp(FIXED_ITEMS.map((f) => ({ description: f.description, price: String(DEFAULT_EXPENSES.find((d) => d.description === f.description)?.price ?? ""), pax: s.pax != null ? String(s.pax + 1) : "" })));
+    setRNoExp(false); setRExpNote(""); setRBusy(false);
     setReportFor(s);
     fetch(`/api/report?date=${s.date}&slotIdx=${s.slotIdx}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
@@ -1542,15 +1545,15 @@ export default function AppClient({
                     <div style={{ display: "grid", gap: 6, margin: "10px 0 0", maxHeight: 240, overflowY: "auto" }}>
                       {rExp.map((e, i) => (
                         <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 76px 58px 26px", gap: 6, alignItems: "center" }}>
-                          <input value={e.description} placeholder={t("expItemHint")} aria-label={t("expItem")} onChange={(ev) => setExp(i, { description: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px" }} />
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>{e.description.replace(" (Inc. Guide)", "")} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. Guide)</span></span>
                           <input type="number" inputMode="decimal" min={0} value={e.price} placeholder={t("expPrice")} aria-label={t("expPrice")} onChange={(ev) => setExp(i, { price: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
                           <input type="number" inputMode="numeric" min={0} value={e.pax} placeholder={t("expPax")} aria-label={t("expPax")} onChange={(ev) => setExp(i, { pax: ev.target.value })} style={{ fontSize: 13, padding: "7px 9px", textAlign: "right" }} />
-                          <button type="button" aria-label={t("expRemove")} title={t("expRemove")} onClick={() => setRExp((rows) => (rows.length > 1 ? rows.filter((_, j) => j !== i) : [{ description: "", price: "", pax: "" }]))} style={{ border: "none", background: "none", color: "var(--ink-soft)", cursor: "pointer", fontSize: 15, padding: 0 }}>✕</button>
+                          <span />
                         </div>
                       ))}
                     </div>
                     <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
-                      <button type="button" className="btn sm" onClick={() => setRExp((rows) => [...rows, { description: "", price: "", pax: String(reportFor.pax ?? "") }])}>{t("expAdd")}</button>
+                      <span style={{ fontSize: 11.5, color: "var(--ink-soft)" }}>🔒 {t("expFixed")}</span>
                       <span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "var(--primary)" }}>{t("expTotal")} ฿{Math.round(expenseTotal).toLocaleString("en-US")}</span>
                     </div>
                     <label className="fld"><span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--ink-soft)" }}>{t("expNoteLabel")}</span>

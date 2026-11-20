@@ -1,5 +1,6 @@
 "use client";
 import AdvanceAccountJournal from "./AdvanceAccountJournal";
+import AdvancePeakRecheck from "./AdvancePeakRecheck";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { explain, RefundRow, type OpsRefund } from "./AdvanceOperations";
 import AdvanceBankSelect from "./AdvanceBankSelect";
@@ -56,6 +57,8 @@ const jfetch = async (url: string, init?: RequestInit) => {
 
 export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role = null, userId = null }: { canEdit?: boolean; isAdmin?: boolean; role?: string | null; userId?: string | null }) {
   const [advances, setAdvances] = useState<Advance[]>([]);
+  // Retry / Resolve a PEAK sync: ADMIN and ACCOUNTANT (owner 2026-11-15; lib/advances/peak-reconcile).
+  const canReconcile = role === "ADMIN" || role === "ACCOUNTANT";
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   // ADVANCE_WRITES_FROZEN, as the server reports it: write controls are disabled while it is on.
   const [frozen, setFrozen] = useState(false);
@@ -163,7 +166,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
             {advances.length === 0 && <tr><td colSpan={9} className="muted">No ticket advance has been recorded.</td></tr>}
             {advances.map((a) => (
               <tr key={a.id}>
-                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}<VoucherLine advance={a} canReissue={canEdit} onReissued={() => void load()} /></td>
+                <td className="mono">{a.advanceNo}<AdvancePeakStatus state={a.peakSync} syncId={`ADVANCE:${a.id}`} canReconcile={canReconcile} onChanged={async (m) => { setMsg(m); await load(); }} />{a.peakLink && <LinkedBadge link={a.peakLink} onUnlink={canLink ? () => void unlink("ADVANCE", a.id, a.peakLink!.documentNo) : undefined} />}<VoucherLine advance={a} canReissue={canEdit} onReissued={() => void load()} /></td>
                 <td>{a.guideId}</td>
                 <td>{a.advanceDate}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{a.jobNo ?? "—"}</td>
@@ -208,7 +211,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
             {receipts.length === 0 && <tr><td colSpan={8} className="muted">No return has been recorded.</td></tr>}
             {receipts.map((r) => (
               <tr key={r.id}>
-                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} />{r.peakLink && <LinkedBadge link={r.peakLink} onUnlink={canLink ? () => void unlink("RETURN", r.id, r.peakLink!.documentNo) : undefined} />}</td>
+                <td className="mono">{r.receiptNo}<AdvancePeakStatus state={r.peakSync} syncId={`RETURN:${r.id}`} canReconcile={canReconcile} onChanged={async (m) => { setMsg(m); await load(); }} />{r.peakLink && <LinkedBadge link={r.peakLink} onUnlink={canLink ? () => void unlink("RETURN", r.id, r.peakLink!.documentNo) : undefined} />}</td>
                 <td>{r.guideId}</td>
                 <td>{r.receivedDate}</td>
                 <td className="r num">{thb(r.amount)}</td>
@@ -263,6 +266,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
       )}
 
       <AdvanceAccountJournal version={loads} />
+      {canReconcile && <AdvancePeakRecheck />}
 
       <h3 style={{ margin: "6px 0 0" }}>Costs still to be booked</h3>
       <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
@@ -332,7 +336,7 @@ export default function AdvancesWorkflow({ canEdit = true, isAdmin = false, role
       {returning && <RecordReturnDialog advance={returning} onClose={() => setReturning(null)} onDone={(m) => { setReturning(null); setMsg(m); void load(); }} />}
       {issuing && <IssueAdvanceDialog isAdmin={isAdmin} onClose={() => setIssuing(false)} onDone={async (m) => { setIssuing(false); setMsg(m); await load(); }}
         onOpenExisting={(id) => { const a = advances.find((x) => x.id === id); setIssuing(false); if (a) setDetail(a); }} />}
-      {detail && <LedgerDialog advance={detail} canEdit={canEdit} isAdmin={isAdmin} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
+      {detail && <LedgerDialog advance={detail} canEdit={canEdit} isAdmin={isAdmin} canReconcile={canReconcile} onClose={() => setDetail(null)} onChanged={async (m) => { setMsg(m); await load(); }} />}
       {linking && <RecordExistingPeakDialog target={linking} bankAccount={returnBank || undefined} onClose={() => setLinking(null)} onDone={async (m) => { setLinking(null); setMsg(m); await load(); }} />}
       {allocating && <AllocateDialog receipt={allocating} advances={open.filter((a) => a.guideId === allocating.guideId)} onClose={() => setAllocating(null)} onDone={async (m) => { setAllocating(null); setMsg(m); await load(); }} />}
     </section>
@@ -595,7 +599,7 @@ type Entry = {
   reversesEntryId: string | null; reversedByEntryId: string | null; canReverse: boolean;
 };
 
-function LedgerDialog({ advance, canEdit, isAdmin, onClose, onChanged }: { advance: Advance; canEdit: boolean; isAdmin: boolean; onClose: () => void; onChanged: (msg: string) => void }) {
+function LedgerDialog({ advance, canEdit, isAdmin, canReconcile = false, onClose, onChanged }: { advance: Advance; canEdit: boolean; isAdmin: boolean; canReconcile?: boolean; onClose: () => void; onChanged: (msg: string) => void }) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [head, setHead] = useState<{ amount: number; settled: number; outstanding: number; status: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -640,7 +644,7 @@ function LedgerDialog({ advance, canEdit, isAdmin, onClose, onChanged }: { advan
               {entries?.map((e) => (
                 <tr key={e.id} style={e.reversedByEntryId ? { opacity: 0.6 } : undefined}>
                   <td>{e.effectiveDate}</td>
-                  <td>{e.label}{e.reversedByEntryId ? " · reversed" : ""}<AdvancePeakStatus state={e.peakSync} /></td>
+                  <td>{e.label}{e.reversedByEntryId ? " · reversed" : ""}<AdvancePeakStatus state={e.peakSync} syncId={`EXPENSE:${e.id}`} canReconcile={canReconcile} onChanged={async (m) => { onChanged(m); await load(); }} /></td>
                   <td className="mono" style={{ fontSize: 11.5 }}>{source(e)}</td>
                   <td className="r num">{thb(e.amount)}</td>
                   <td style={{ fontSize: 12 }}>{e.reason ?? ""}</td>

@@ -249,9 +249,10 @@ try {
   await page.waitForFunction((no) => document.body.innerText.includes(no), { timeout: 15000 }, ORIGINAL_NO).catch(() => {});
   await pause(800);
   const hist = await page.evaluate(() => [...document.querySelectorAll("table.acct-table tbody tr")].map((r) => r.innerText.replace(/\s+/g, " ")).filter((t) => /FOLK-PMT-/.test(t)));
-  // The history table's rows begin with the payment number (the jobs table above it only names one).
-  const origLine = hist.find((t) => t.trim().startsWith(ORIGINAL_NO)) ?? "";
-  const suppLine = hist.find((t) => supp && t.trim().startsWith(supp.paymentNo)) ?? "";
+  // A history row leads with its PEAK EXP (or "No PEAK EXP"), the payment number beneath it
+  // (owner 2026-11-15) — so a row is found by its payment number, not by how it starts.
+  const origLine = hist.find((t) => t.includes(ORIGINAL_NO) && /Guide payment|Supplemental/.test(t)) ?? "";
+  const suppLine = hist.find((t) => supp && t.includes(supp.paymentNo) && /Guide payment|Supplemental/.test(t)) ?? "";
   check("history: the original is a guide payment for its own amount", /Guide payment/.test(origLine) && /฿1,477\.00/.test(origLine), origLine);
   check("history: the new one is Supplemental · Review incentive for ฿300", /Supplemental · Review incentive/.test(suppLine) && /฿300\.00/.test(suppLine), suppLine);
   check("the Payments page ran without a crash", errors.length === 0, errors.join(" | ").slice(0, 200));
@@ -288,7 +289,7 @@ try {
   await pause(1500);
   await p2.evaluate((g) => { const tr = [...document.querySelectorAll("tr")].find((t) => t.innerText.includes(g) && /Pending|PENDING/.test(t.innerText)); tr?.click(); }, G);
   await pause(800);
-  await p2.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record payment · 1 unpaid/.test(b.textContent.trim()))?.click());
+  await p2.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Record without PEAK EXP/.test(b.textContent.trim()))?.click());
   await p2.waitForSelector(".js-review-due", { timeout: 15000 }).catch(() => {});
   const due = await text(p2, ".js-review-due");
   check("Record payment offers this guide's unpaid review incentive for the same transfer", /2 reviews/.test(due) && /฿100\.00/.test(due) && /paid in full, no tax/.test(due), due.replace(/\s+/g, " ").slice(0, 160));

@@ -238,7 +238,9 @@ export async function removeAttachment(o: { db?: Db; actor: Actor; id: string; r
   return { ok: true };
 }
 
-export type AttachmentView = { id: string; rowId: string; name: string; mime: string; size: number; link: string | null; uploadedAt: string; uploadedByRole: string | null; mine: boolean; removable: boolean };
+export type AttachmentView = { id: string; rowId: string; name: string; mime: string; size: number; link: string | null; uploadedAt: string; uploadedByRole: string | null; mine: boolean; removable: boolean;
+  /** Operator review (owner 2026-11-15). reviewNote is the note the guide is meant to read. */
+  reviewStatus: string; reviewNote: string | null };
 
 /** Live files on a sheet, grouped by row id, for someone allowed to see them. */
 export async function attachmentsFor(db: Db, sheet: { id: string; guideId: string; approvalStatus: string | null }, actor: Actor): Promise<Record<string, AttachmentView[]>> {
@@ -251,6 +253,7 @@ export async function attachmentsFor(db: Db, sheet: { id: string; guideId: strin
       id: a.id, rowId: a.expenseRowId, name: a.originalName, mime: a.mimeType, size: a.sizeBytes, link: a.driveLink,
       uploadedAt: a.uploadedAt.toISOString(), uploadedByRole: a.uploadedByRole, mine: !!actor.id && a.uploadedById === actor.id,
       removable: canRemove(actor, sheet, a),
+      reviewStatus: a.reviewStatus ?? "NOT_REVIEWED", reviewNote: a.reviewNote ?? null,
     });
   }
   return out;

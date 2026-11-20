@@ -644,6 +644,12 @@ model JobSheet {
 
   advanceReceipts GuideAdvanceReceipt[] // returns a guide said were for this job (intent only)
 
+  // Tour Upsell (PR1 foundation): add-ons sold on this job, the company cash a guide holds
+  // from them, and the remittance that clears it.
+  upsellSales     UpsellSale[]
+  cashCustody     CashCustodyEntry[]
+  cashSettlements CashSettlement[]
+
   @@unique([guideId, date, slotIdx])
   @@index([date])
 }
@@ -2082,8 +2088,274 @@ model ExpenseAttachment {
   removedById    String?
   removedAt      DateTime?
   removeReason   String?
+  // Operator review (owner 2026-11-15): NOT_REVIEWED | VERIFIED | REJECTED | REPLACEMENT_REQUESTED.
+  // reviewNote is shown to the guide on a rejection / request; internal notes stay in AuditLog.
+  reviewStatus   String    @default("NOT_REVIEWED")
+  reviewNote     String?
+  reviewedById   String?
+  reviewedAt     DateTime?
   updatedAt      DateTime  @updatedAt
 
   @@index([jobSheetId, expenseRowId])
   @@index([sha256])
+}
+
+// ─── Tour Upsell Engine — foundation (PR1) ─────────────────────────────────────────────────
+//
+// Guides sell add-ons during a tour (a route extension on the same job, or a new Food Tour).
+// Money a guide collects is the COMPANY's cash held by the guide until remitted with the
+// end-tour report of the job it was collected on. Amounts are integer satang. The database
+// refuses what must never happen (negative money, a custodian who did not collect the cash,
+// editing or deleting a confirmed transaction) — see the CHECKs and triggers in
+// migrations/*_upsell_foundation. Nothing here is wired to a route or a page yet; every
+// feature switch (lib/upsell/flags) is off.
+
+// What can be sold. The selling rules live in versions; a product only names the thing.
+model UpsellProduct {
+  id          String   @id @default(cuid())
+  productCode String   @unique // e.g. RTE-WPWA, FOOD-BKK
+  productName String
+  productType String // ROUTE_EXTENSION | NEW_TOUR | JOIN_SOURCE_TOUR (CHECK); never changes once set (trigger)
+  active      Boolean  @default(false)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  versions UpsellProductVersion[]
+}
+
+// One set of selling rules. A sale keeps a snapshot of the version it was sold under, so a
+// later version never changes an old sale. Per-guide capacity is NOT configured here: it is
+// PAX_PER_GUIDE (lib/capacity), the one source of truth. There is no gateway-fee rate here
+// either — fees come from the gateway's settlement only.
+model UpsellProductVersion {
+  id                        String        @id @default(cuid())
+  productId                 String
+  product                   UpsellProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  version                   Int
+  unitPriceSatang           Int
+  pricingBasis              String        @default("PER_GUEST") // PER_GUEST | PER_GROUP
+  allowedPaymentMethods     String[] // CASH | BANK_TRANSFER (PAYMENT_LINK opens with the gateway work)
+  createsNewBooking         Boolean       @default(false)
+  createsNewJob             Boolean       @default(false)
+  serviceTourId             String? // the tour a new booking is filed under (resolved per slot by slotAwareTourId)
+  // JOIN_SOURCE_TOUR only (trigger): the tours whose own job a walk-in seat can join; empty otherwise.
+  eligibleSourceTourIds     String[]      @default([])
+  // JOIN_SOURCE_TOUR only (trigger): its booking may sit on a job that also carries OTA guests.
+  allowsOtaMix              Boolean       @default(false)
+  remittanceMethod          String        @default("ANY") // ANY | BANK_TRANSFER (JOIN_SOURCE_TOUR: BANK_TRANSFER)
+  capacityGroupKey          String? // departures that share seats, e.g. FOOD-CHINATOWN; set explicitly, never guessed
+  fixedCostPerGuestSatang   Int           @default(0)
+  fixedCostBasis            String? // PAID | ATTENDED — required when there is a fixed cost; a food tour is PAID
+  fixedCostCategory         String? // PeakAccountMapping.folkopsCategory
+  incentivePerGuestSatang   Int           @default(0)
+  incentiveTrigger          String        @default("NONE") // NONE | SERVICE_APPROVED
+  incentiveBasis            String        @default("PAID_GUESTS") // always PAID_GUESTS (CHECK)
+  serviceValidityDays       Int? // counted from paid_at; null = within the source job
+  checkoutLinkExpiryMinutes Int? // the payment link's own expiry; unrelated to service validity
+  remittanceTrigger         String        @default("SOURCE_JOB_END") // the only value (CHECK)
+  serviceScope              String        @default("EXISTING_GUIDE") // EXISTING_GUIDE | ASSIGNED_SEPARATELY
+  revenueCategory           String // PeakAccountMapping.folkopsCategory
+  taxProfileId              String
+  taxProfile                TaxProfile    @relation(fields: [taxProfileId], references: [id], onDelete: Restrict)
+  priceOverridePermission   String        @default("NONE") // NONE | ADMIN_APPROVAL
+  refundPolicy              String        @default("NON_REFUNDABLE") // NON_REFUNDABLE | ADMIN_ONLY
+  activeFrom                DateTime      @db.Date // a real calendar date (Postgres DATE)
+  activeTo                  DateTime?     @db.Date
+  createdById               String?
+  createdAt                 DateTime      @default(now())
+
+  sales UpsellSale[]
+
+  @@unique([productId, version])
+}
+
+// VAT / revenue recognition / breakage / PEAK document kind / withholding tax. Stays DRAFT
+// until the accountant has answered every question; while DRAFT nothing built on it may be
+// sent to PEAK. No rate is assumed anywhere: every rate is the accountant's answer, and
+// "unanswered" (UNCONFIRMED / null) is never read as zero. Once CONFIRMED it is frozen — a
+// changed answer is a new profile.
+model TaxProfile {
+  id                 String    @id @default(cuid())
+  code               String    @unique
+  name               String
+  // UNCONFIRMED | NONE (no VAT: exempt / outside VAT) | ZERO_RATED (VAT at 0%) |
+  // INCLUSIVE | EXCLUSIVE (VAT at vatRateBp, which must then be > 0)
+  vatMode            String    @default("UNCONFIRMED")
+  vatRateBp          Int? // basis points; present exactly when INCLUSIVE / EXCLUSIVE
+  revenueRecognition String? // AT_PAYMENT | AT_SERVICE
+  breakageOnExpiry   Boolean? // recognise revenue on an unused, expired service?
+  peakDocumentKind   String? // JOURNAL | RECEIPT | TAX_INVOICE_RECEIPT
+  // Withholding tax, answered separately for the guide's incentive and for the fixed
+  // (food) cost: UNCONFIRMED | NOT_WITHHELD | FIXED_RATE (the pct below, > 0) |
+  // ENTERED_PER_PAYMENT (the operator enters the rate on each payment). Bearer: who carries
+  // the withheld amount — PAYEE (deducted from the payment) | COMPANY (grossed up).
+  incentiveWhtMode   String    @default("UNCONFIRMED")
+  incentiveWhtPct    Decimal?  @db.Decimal(5, 2)
+  incentiveWhtBearer String?
+  fixedCostWhtMode   String    @default("UNCONFIRMED")
+  fixedCostWhtPct    Decimal?  @db.Decimal(5, 2)
+  fixedCostWhtBearer String?
+  status             String    @default("DRAFT") // DRAFT | CONFIRMED
+  confirmedById      String?
+  confirmedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  productVersions UpsellProductVersion[]
+}
+
+// Atomic document numbers for the upsell documents (FOLK-UPS-YYYYMM-NNN, FOLK-CSH-…),
+// reserved the way JobRefCounter reserves job numbers. A reserved number is never reused.
+model UpsellDocCounter {
+  key     String @id // "<PREFIX>-YYYYMM"
+  lastSeq Int
+}
+
+// One add-on sale. Roles are separate fields on purpose — the seller, the person who took
+// the cash and the person who serves the tour may all differ.
+model UpsellSale {
+  id                        String               @id @default(cuid())
+  saleNo                    String               @unique // FOLK-UPS-YYYYMM-NNN — also the guest's receipt reference
+  productVersionId          String
+  productVersion            UpsellProductVersion @relation(fields: [productVersionId], references: [id], onDelete: Restrict)
+  ruleSnapshot              Json // the version's rules at the moment of sale; never rewritten
+  sourceJobSheetId          String
+  sourceJobSheet            JobSheet             @relation(fields: [sourceJobSheetId], references: [id], onDelete: Restrict)
+  sourceBookingId           String?
+  sellingGuideId            String
+  serviceGuideId            String?
+  fixedCostRecipientId      String?
+  pricingBasis              String               @default("PER_GUEST")
+  guests                    Int
+  unitPriceSatang           Int
+  grossSatang               Int
+  priceOverrideReason       String?
+  priceOverrideApprovedById String?
+  customerName              String?
+  customerContact           String?
+  serviceBookingId          String?              @unique // the Food Tour booking it created
+  serviceValidUntil         DateTime? // paid_at + serviceValidityDays
+  status                    String               @default("DRAFT") // see CHECK
+  requestKey                String               @unique // the client's idempotency key
+  createdById               String?
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
+
+  payments UpsellPayment[]
+  custody  CashCustodyEntry[]
+
+  @@index([sourceJobSheetId])
+  @@index([sellingGuideId, createdAt])
+}
+
+// Money in for a sale. Cash is recorded by the guide who took it (and is then that guide's
+// custody); a transfer to the company is confirmed by an admin against the bank. Card
+// payments are not accepted yet (the CHECK allows CASH and BANK_TRANSFER only).
+model UpsellPayment {
+  id                String     @id @default(cuid())
+  saleId            String
+  sale              UpsellSale @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  method            String // CASH | BANK_TRANSFER
+  amountSatang      Int
+  // PENDING → COLLECTED (cash) | CONFIRMED (transfer) | FAILED; COLLECTED → CONFIRMED | REVERSED;
+  // CONFIRMED → REVERSED. FAILED and REVERSED are final. Enforced by upsell_payment_guard.
+  status            String     @default("PENDING") // PENDING | COLLECTED | CONFIRMED | FAILED | REVERSED
+  statusSource      String? // GUIDE_CASH | ADMIN_BANK_MATCH
+  cashCollectorId   String? // required exactly when method = CASH
+  evidenceId        String? // PaymentEvidence id (slip / statement)
+  bankRef           String?
+  bankRefNormalized String?
+  bankAccountKey    String?
+  confirmedById     String?
+  confirmedAt       DateTime?
+  requestKey        String     @unique
+  createdById       String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  custody CashCustodyEntry[]
+
+  @@unique([bankAccountKey, bankRefNormalized])
+  @@index([saleId])
+}
+
+// The guide's custody ledger: append-only, one row per movement of company cash a guide
+// holds. COLLECTED is positive; deductions, remittance and shortages are negative; a
+// REVERSAL negates exactly one earlier entry. The balance per (custodian, job) can never go
+// below zero, and the custodian is always the guide who collected the cash — cash is never
+// handed from guide to guide.
+model CashCustodyEntry {
+  id               String            @id @default(cuid())
+  custodianId      String
+  sourceJobSheetId String
+  sourceJobSheet   JobSheet          @relation(fields: [sourceJobSheetId], references: [id], onDelete: Restrict)
+  kind             String // COLLECTED | DEDUCT_FIXED_COST | DEDUCT_INCENTIVE | DEDUCT_APPROVED | REMITTED | SHORTAGE | REVERSAL
+  amountSatang     Int
+  paymentId        String?
+  payment          UpsellPayment?    @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  saleId           String?
+  sale             UpsellSale?       @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  settlementId     String?
+  settlement       CashSettlement?   @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  sourceRefId      String? // the incentive / fixed-cost / approval a deduction rests on
+  reversesId       String?           @unique
+  reverses         CashCustodyEntry? @relation("CustodyReversal", fields: [reversesId], references: [id], onDelete: Restrict)
+  reversedBy       CashCustodyEntry? @relation("CustodyReversal")
+  idempotencyKey   String?           @unique
+  note             String?
+  createdById      String?
+  createdAt        DateTime          @default(now())
+
+  @@index([custodianId, sourceJobSheetId])
+}
+
+// A guide's remittance of the cash they hold for one job, with its evidence. CONFIRMED by an
+// admin against the bank; after that it can only be reversed, never edited.
+model CashSettlement {
+  id                String    @id @default(cuid())
+  settlementNo      String    @unique // FOLK-CSH-YYYYMM-NNN
+  guideId           String
+  sourceJobSheetId  String
+  sourceJobSheet    JobSheet  @relation(fields: [sourceJobSheetId], references: [id], onDelete: Restrict)
+  expectedSatang    Int
+  remittedSatang    Int
+  method            String // BANK_TRANSFER | CASH_AT_OFFICE
+  evidenceId        String?
+  bankRef           String?
+  bankRefNormalized String?
+  bankAccountKey    String?
+  // DRAFT → SUBMITTED → CONFIRMED → REVERSED; SUBMITTED → RETURNED → (corrected) → SUBMITTED.
+  // Enforced by cash_settlement_guard; amounts change only in DRAFT / RETURNED.
+  status            String    @default("DRAFT") // DRAFT | SUBMITTED | RETURNED | CONFIRMED | REVERSED
+  submissionNo      Int       @default(0) // set by the database: +1 on every move into SUBMITTED
+  submittedAt       DateTime? // set by the database on every move into SUBMITTED
+  // The reason for the CURRENT return: present exactly while RETURNED, cleared by the
+  // database on resubmission. Every return is kept, unchangeable, in CashSettlementReturn.
+  returnedReason    String?
+  confirmedById     String?
+  confirmedAt       DateTime?
+  requestKey        String?   @unique
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  entries CashCustodyEntry[]
+  returns CashSettlementReturn[]
+
+  @@unique([guideId, sourceJobSheetId])
+  @@unique([bankAccountKey, bankRefNormalized])
+}
+
+// The history of a settlement's returns: one row per SUBMITTED → RETURNED, written by the
+// database itself (cash_settlement_return_history) with the round it returned. Append-only —
+// a reason, once given, can never be edited or removed.
+model CashSettlementReturn {
+  id           String         @id @default(cuid())
+  settlementId String
+  settlement   CashSettlement @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  submissionNo Int // the submission that was returned
+  reason       String
+  createdAt    DateTime       @default(now())
+
+  @@unique([settlementId, submissionNo])
 }

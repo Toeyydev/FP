@@ -77,9 +77,10 @@ describe("an ordinary save keeps what the server owns", () => {
     expect((await rowsNow())[0].paidByBy).toBe("u_ops");
   });
 
+  // Company-paid: a cost the guide paid must be Water / Bus / Ferry (owner 2026-11-16).
   it("everything else on the sheet still saves normally", async () => {
     await seedSheet([ferry({ evidenceWaiver: WAIVER })]);
-    await save([ferry(), { description: "Snacks", price: 40, pax: 4, expenseType: "meal", paidBy: "guide", paidBySource: "operator" }], { operatorNote: "added a snack stop" });
+    await save([ferry(), { description: "Snacks", price: 40, pax: 4, expenseType: "meal", paidBy: "company", paidBySource: "operator" }], { operatorNote: "added a snack stop" });
     const rows = await rowsNow();
     expect(rows).toHaveLength(2);
     expect(rows[0].evidenceWaiver).toEqual(WAIVER);

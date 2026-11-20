@@ -5,6 +5,7 @@ import { decrypt } from "@/lib/crypto";
 import { SLOT_TIMES } from "@/lib/slots";
 import { DEFAULT_GUIDE_FEE, defaultExpensesForTour, computeTotals, expenseAmount, expenseCategory, feeIsAdjusted, feeIsLegacyHalf, shownStandardFee, expenseCategoryLabel, isReviewExpense, jobCostBreakdown, noShowStats, reviewBelongsToJob, thb, type Expense, type GuideFee, type Booking } from "@/lib/jobsheet";
 import { canViewFinance } from "@/lib/roles";
+import { guideAdvanceCard } from "@/lib/advances/guide-card";
 import { jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
 import { paidByShortLabel } from "@/lib/paid-by-label";
 import { bookingRef } from "@/lib/booking-ref";
@@ -56,6 +57,10 @@ export async function GET(req: NextRequest) {
   // exists. Cash movements — never added into the expense or payable totals.
   // Phase 3: from the ledger (lib/advances/job-view), the same numbers the job sheet shows.
   const advView = guideId ? await jobAdvanceView(prisma, { guideId, date, slotIdx, expenses: (existing?.expenses as unknown as Expense[]) ?? [] }) : null;
+  // A guide's copy carries only their Company ADV card (lib/advances/guide-card) — no ADV
+  // number, bank reference, dates or settlement ledger. The full section is finance roles only.
+  const seesLedger = canViewFinance(session.user.role);
+  const guideCard = seesLedger ? null : guideAdvanceCard(advView);
   let bookings = (sheet.bookings as Booking[]) ?? [];
   // No saved sheet yet → pull the slot's live bookings so the prep PDF still
   // lists every guest (name + OTA ref + pax) for the operator to work from.
@@ -265,7 +270,12 @@ export async function GET(req: NextRequest) {
     </div>
 
 
-    ${advView && (advView.advances.length || advView.returns.length) ? (() => {
+    ${guideCard ? `<div class="adv advance-settlement js-guide-adv"><h3>Company ADV <small>เงินทดรองจ่ายจากบริษัท</small></h3>
+      <table><tbody>
+        <tr><td>✓ Transferred <small>โอนแล้ว</small></td><td class="n">${thb(guideCard.amount)}</td></tr>
+        ${guideCard.toReturn > 0 ? `<tr><td>To return <small>ต้องคืนบริษัท</small></td><td class="n">${thb(guideCard.toReturn)}</td></tr>` : ""}
+      </tbody></table></div>` : ""}
+    ${seesLedger && advView && (advView.advances.length || advView.returns.length) ? (() => {
       const v = advView;
       const dt = (x: Date) => new Date(x).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
       const waiting = v.returns.filter((r) => r.status === "CLAIMED" || r.unallocated > 0);

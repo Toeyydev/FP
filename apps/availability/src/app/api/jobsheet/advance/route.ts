@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { isOps } from "@/lib/roles";
+import { guideAdvanceCard } from "@/lib/advances/guide-card";
 import { googleDriveEnabled, folkpathsDriveToken, saveBufferToDrive } from "@/lib/google-drive";
 import { notifyGuide } from "@/lib/booking-import";
 import { thb } from "@/lib/jobsheet";
@@ -91,7 +92,9 @@ export async function POST(req: NextRequest) {
       confirmedArrived: opsUser && confirmedArrived,
     });
     if (!r.ok) return NextResponse.json({ error: r.error, ...(r.hint ? { hint: r.hint } : {}) }, { status: r.status });
-    return NextResponse.json({ ok: true, ...(await viewFor(guideId, date, slotIdx)) });
+    // A guide gets back only their card (lib/advances/guide-card), never the ledger.
+    const view = await viewFor(guideId, date, slotIdx);
+    return NextResponse.json(opsUser ? { ok: true, ...view } : { ok: true, guideAdvance: guideAdvanceCard(view) });
   }
 
   const sheet = await prisma.jobSheet.findUnique({ where: { guideId_date_slotIdx: key(guideId, date, slotIdx) }, select: { id: true, ref: true } });

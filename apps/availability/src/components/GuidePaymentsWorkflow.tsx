@@ -1,5 +1,6 @@
 "use client";
 
+import { primaryReference } from "@/lib/payments-v2/primary-ref";
 import { useCallback, useEffect, useState } from "react";
 import { thb } from "@/lib/jobsheet";
 import RecordGuidePaymentDialog, { type PayableJob } from "@/components/RecordGuidePaymentDialog";
@@ -20,7 +21,7 @@ type PaymentRow = {
   id: string; paymentNo: string; status: string; source: string; guideId: string; guide: string;
   paymentDate: string; accountingPeriod: string; amountTransferred: number; jobTotal: number; adjustmentTotal: number;
   createdAt: string; reversedAt: string | null; reversalReason: string | null; slipUrl: string | null; noSlipReason: string | null;
-  jobs: { jobNo: string; payable: number }[];
+  jobs: { jobNo: string; payable: number; peakDocumentNo?: string | null; active?: boolean }[];
   kind?: string; supplements?: { typeLabel: string; netAmount: number }[];
 };
 type SupplementLine = { supplementalId: string; typeLabel: string; accountingCategory: string; grossAmount: number; wht: number; netAmount: number; active: boolean; reason: string; jobs: string[]; originalPaymentNo: string | null };
@@ -242,7 +243,12 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
               {payments.length > 0 && shownPayments.length === 0 && <tr><td colSpan={8} className="op-empty">No payment matches the filters.</td></tr>}
               {shownPayments.map((p) => (
                 <tr key={p.id}>
-                  <td className="num">{p.paymentNo}<small style={{ display: "block", fontSize: 11, color: p.kind === "SUPPLEMENTAL" ? "var(--primary)" : "var(--ink-soft)", fontWeight: p.kind === "SUPPLEMENTAL" ? 600 : 400 }}>{paymentKindLabel(p)}</small></td>
+                  {/* The PEAK EXP is the reference (owner 2026-11-15); FOLK-PMT stays, small. */}
+                  {(() => { const ref = primaryReference(p); return (
+                    <td className="num js-payment-ref" data-kind={ref.kind}><span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>{ref.kind === "NONE" ? "No PEAK EXP" : ref.label}</span>
+                      <small style={{ display: "block", fontSize: 11, color: "var(--ink-soft)", fontFamily: "monospace" }}>{p.paymentNo}</small>
+                      <small style={{ display: "block", fontSize: 11, color: p.kind === "SUPPLEMENTAL" ? "var(--primary)" : "var(--ink-soft)", fontWeight: p.kind === "SUPPLEMENTAL" ? 600 : 400 }}>{paymentKindLabel(p)}</small></td>
+                  ); })()}
                   <td><span className="gid">{p.guideId}</span> {p.guide}</td>
                   <td>{p.paymentDate}</td>
                   <td className="r num"><b>{thb(p.amountTransferred)}</b></td>
@@ -260,7 +266,7 @@ export default function GuidePaymentsWorkflow({ canEdit, isAdmin = false }: { ca
       {openPayment && (
         <div className="scrim show" onClick={(e) => { if (e.target === e.currentTarget) { setFix(null); setOpenPayment(null); } }}>
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="pmt-h" style={{ width: "min(720px, 100%)" }}>
-            <h3 id="pmt-h">{openPayment.paymentNo}</h3>
+            <h3 id="pmt-h">{(() => { const ref = primaryReference(openPayment); return ref.kind === "NONE" ? <>{openPayment.paymentNo} <small style={{ fontWeight: 500, color: "var(--ink-soft)" }}>· no PEAK EXP</small></> : <>{ref.exps.join(" · ")} <small style={{ fontWeight: 500, color: "var(--ink-soft)", fontFamily: "monospace" }}>{openPayment.paymentNo}</small></>; })()}</h3>
             <div className="mctx">{paymentKindLabel(openPayment)} · {openPayment.guideId} · {openPayment.guide} · transfer date {openPayment.paymentDate} · accounting month {openPayment.accountingPeriod}</div>
             <div className="mbody" style={{ display: "grid", gap: 12 }}>
               {openPayment.status === "REVERSED" && (

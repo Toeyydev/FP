@@ -15,8 +15,7 @@ export const dynamic = "force-dynamic";
 // so a voucher can never show figures the ledger has moved past. The Drive copy is
 // the filed one; this is the live one.
 //
-// Readable by the finance roles and by the guide it belongs to — nobody else, since
-// it carries a bank reference and an amount.
+// Readable by the finance roles only — it carries a bank reference and an amount.
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
   const role = session?.user?.role;
@@ -26,7 +25,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const advance = await prisma.guideAdvance.findUnique({ where: { id } });
   if (!advance) return NextResponse.json({ error: "not-found" }, { status: 404 });
-  if (!canViewFinance(role) && myGuideId !== advance.guideId) {
+  // Finance roles only (owner 2026-11-11): a guide is shown the amount and "Transferred",
+  // never the voucher with its ADV number, bank reference and dates (lib/advances/guide-card).
+  if (!canViewFinance(role)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 

@@ -6,6 +6,7 @@ const prismaMock = vi.hoisted(() => ({
   checkin: { findMany: vi.fn(), findFirst: vi.fn() },
   tourReport: { findMany: vi.fn() },
   jobSheet: { findUnique: vi.fn() },
+  tourPayment: { findUnique: vi.fn() },
   tour: { findUnique: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
@@ -20,6 +21,7 @@ beforeEach(() => {
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.tourReport.findMany.mockResolvedValue([]);
   prismaMock.jobSheet.findUnique.mockResolvedValue(null);
+  prismaMock.tourPayment.findUnique.mockResolvedValue(null);
 });
 
 describe("bangkokToday", () => {
@@ -166,7 +168,7 @@ describe("guideTourDetails", () => {
     expect(details?.bookings.map((b) => b.tickets)).toEqual(["included", "not", ""]);
     expect(prismaMock.jobSheet.findUnique.mock.calls[0][0]).toEqual({
       where: { guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-11", slotIdx: 0 } },
-      select: { bookings: true, expenses: true },
+      select: { bookings: true, expenses: true, approvalStatus: true },
     });
   });
 
@@ -184,12 +186,30 @@ describe("guideTourDetails", () => {
     expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("included");
   });
 
-  it("keeps a saved blank ticket tag instead of replacing it from the rate", async () => {
-    prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
-    prismaMock.tour.findUnique.mockResolvedValue(null);
-    prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Guest", confirmationCode: "FP-1", externalRef: "OTA-1", pax: 2, source: "viator", noShowPax: 0, rateTitle: "Tour with all entrance tickets" }]);
-    prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [{ name: "Guest", bookingNo: "OTA-1", bookedPax: 2, actualPax: null, tickets: "", status: "" }] });
-    expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+  describe("a saved blank ticket tag — the same rule the job sheet shows", () => {
+    const blankRow = (over: Record<string, unknown> = {}) => ({ bookings: [{ name: "Guest", bookingNo: "OTA-1", bookedPax: 2, actualPax: null, tickets: "", status: "" }], ...over });
+    beforeEach(() => {
+      prismaMock.assignment.findUnique.mockResolvedValue({ tourId: "T-001", pax: 2, note: null });
+      prismaMock.tour.findUnique.mockResolvedValue(null);
+      prismaMock.booking.findMany.mockResolvedValue([{ id: "b1", customerName: "Guest", confirmationCode: "FP-1", externalRef: "OTA-1", pax: 2, source: "viator", noShowPax: 0, rateTitle: "Tour with all entrance tickets" }]);
+    });
+    it("is filled from an unambiguous rate while the sheet is open", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue(blankRow());
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("included");
+    });
+    it("stays blank on an approved sheet", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue(blankRow({ approvalStatus: "APPROVED" }));
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+    });
+    it("stays blank once the job is paid", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue(blankRow());
+      prismaMock.tourPayment.findUnique.mockResolvedValue({ status: "PAID" });
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("");
+    });
+    it("never replaces a value someone chose", async () => {
+      prismaMock.jobSheet.findUnique.mockResolvedValue({ bookings: [{ name: "Guest", bookingNo: "OTA-1", bookedPax: 2, actualPax: null, tickets: "not", status: "" }] });
+      expect((await guideTourDetails("G-001", "2026-09-11", 0))?.bookings[0].tickets).toBe("not");
+    });
   });
 
   describe("the job's expense lines", () => {

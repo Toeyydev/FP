@@ -1,11 +1,13 @@
 "use client";
 
+import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { liveJobAdvances } from "@/lib/advances/coverage";
 import SlipCheckPanel, { existingAdvanceHref, type SlipDecisionFields } from "./SlipCheckPanel";
 import AdvanceBankSelect from "./AdvanceBankSelect";
 import AdvancePeakStatus from "./AdvancePeakStatus";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import UpsellExtras from "./UpsellExtras";
 import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
@@ -21,6 +23,7 @@ import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak
 import { approvalView, JOB_SHEET_ROLE_NOTE_TH } from "@/lib/jobsheet-approval";
 import CertificateReference from "@/components/CertificateReference";
 import WhatsAppButton from "@/components/WhatsAppButton";
+import TicketBadge from "@/components/TicketBadge";
 import MoveDepartureDialog from "@/components/MoveDepartureDialog";
 import { JOB_SHEET_COMPANY_INFO as CO } from "@/lib/company";
 import { SLOT_TIMES } from "@/lib/slots";
@@ -34,6 +37,12 @@ import { HANDOVER_REASON_LABEL, type HandoverReason } from "@/lib/tour-handover"
 import { NAME_PREFIXES } from "@/lib/peak-guide-contact";
 import ExpenseCertificatePanel from "@/components/ExpenseCertificatePanel";
 import CopyMemo from "@/components/CopyMemo";
+import GuideAdvanceCard from "@/components/GuideAdvanceCard";
+import GuideTourExpenses from "@/components/GuideTourExpenses";
+import GuideTicketReceipts from "@/components/GuideTicketReceipts";
+import OperatorExpenseReview from "@/components/OperatorExpenseReview";
+import { fixedItemOf, isAdvanceRow, operatorRowProblems, shownAs, type ReportRow } from "@/lib/guide-fixed-expenses";
+import type { GuideAdvanceCard as GuideAdvanceCardData } from "@/lib/advances/guide-card";
 import { advanceMemo, returnMemo } from "@/lib/bank-memo";
 import { ceDate } from "@/lib/ce-date";
 
@@ -146,6 +155,9 @@ export default function JobSheetEditor() {
   const [arrivals, setArrivals] = useState<Record<string, string>>({});
   // Row id → the files behind that expense row (lib/expense-attachments).
   const [attachments, setAttachments] = useState<Record<string, AttachmentView[]>>({});
+  // Operator review (owner 2026-11-15): each fixed item's PEAK account and the review history.
+  const [expenseAccounts, setExpenseAccounts] = useState<Record<string, { code: string | null; name: string | null } | null> | undefined>(undefined);
+  const [reviewHist, setReviewHist] = useState<{ at: string; action: string; by: string; detail: Record<string, unknown> }[]>([]);
   const [moveOpen, setMoveOpen] = useState(false); // Move departure (components/MoveDepartureDialog)
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
   const [bookingSync, setBookingSync] = useState<{ at: string; from: number | null; to: number | null; source: string | null } | null>(null);
@@ -190,6 +202,8 @@ export default function JobSheetEditor() {
   const [fillPax, setFillPax] = useState(""); // "fill down": one guest count → every expense line's pax
   // Guide advance + settlement (cash movements — separate from expenses, see lib/advance)
   const [advance, setAdvance] = useState<AdvanceData>(EMPTY_ADVANCE);
+  // A guide's cut-down Company ADV (the server sends a guide this instead of `advance`).
+  const [guideAdv, setGuideAdv] = useState<GuideAdvanceCardData | null>(null);
   // Whether the job's advances have been read from the server yet. Until they have, "no
   // advance on record" is not something this screen may say.
   const [advanceLoaded, setAdvanceLoaded] = useState(false);
@@ -237,6 +251,7 @@ export default function JobSheetEditor() {
     setPastGaps(d.pastBookingGaps ?? null);
     setHeader(d.header); setTour(d.tour); setSheet(d.sheet); setSaved(d.saved); setCanEdit(d.canEdit !== false); setRates(d.rates && Array.isArray(d.rates.kinds) && Array.isArray(d.rates.titles) ? d.rates : null); setIsAdmin(d.isAdmin === true); setRole(typeof d.role === "string" ? d.role : null); setUserId(typeof d.userId === "string" ? d.userId : null); setApprovedByName(typeof d.approvedByName === "string" ? d.approvedByName : null); setGuestContacts(d.guestContacts && typeof d.guestContacts === "object" ? d.guestContacts : {}); setArrivals(d.arrivals && typeof d.arrivals === "object" ? d.arrivals : {}); setAttachments(d.attachments && typeof d.attachments === "object" ? d.attachments : {}); setBookingSync(d.bookingSync ?? null); setCheckedIn(!!d.checkedIn); setTourDay(d.tourDay && Array.isArray(d.tourDay.steps) ? d.tourDay : null); setApproveCertifies(Number(d.approveCertifies) || 0); setPayment(d.payment ?? null); setCombinedPayment(d.combinedPayment ?? null); setHandover(d.handover ?? null); setPeakStatus(d.peakStatus ?? null);
     setAdvance(d.advance ?? EMPTY_ADVANCE);
+    setGuideAdv(d.guideAdvance ?? null);
     setAdvanceLoaded(!!d.advance);
     setJobMeta(d.jobMeta ?? null); setHistory(Array.isArray(d.history) ? d.history : []); setPeak(d.peak ?? null);
     // Seed the guide's expense report: their last submission if any, else the standard
@@ -245,6 +260,7 @@ export default function JobSheetEditor() {
     // The guide reports what they paid on tour — never the review reward (the operator's to record).
     setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).filter((e: Expense) => !isReviewExpense(e)).map((e: Expense) => ({ ...e })));
     setGuideNote(s?.guideExpensesNote ?? "");
+    setExpenseAccounts(d.expenseAccounts ?? undefined); setReviewHist(Array.isArray(d.reviewHistory) ? d.reviewHistory : []);
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
   // Other Tour Cost may have a standing default (set under PEAK sync), but a row
@@ -537,6 +553,7 @@ export default function JobSheetEditor() {
     const fresh = await jfetch(`/api/jobsheet?guideId=${encodeURIComponent(sheet.guideId)}&date=${sheet.date}&slotIdx=${sheet.slotIdx}`);
     const fd2 = await fresh.json().catch(() => ({}));
     if (fd2.advance) setAdvance(fd2.advance);
+    if ("guideAdvance" in fd2) setGuideAdv(fd2.guideAdvance ?? null);
     if (fd2.sheet?.updatedAt) setSheet((x) => (x ? { ...x, updatedAt: fd2.sheet.updatedAt, expenses: x.expenses.map((e, i) => ({ ...e, ...(fd2.sheet.expenses?.[i]?.advanceId ? { advanceId: fd2.sheet.expenses[i].advanceId } : {}) })) } : x));
   }
   // The live advances of this job that may pay for a category (lib/advances/categories, as the
@@ -1124,8 +1141,7 @@ export default function JobSheetEditor() {
                             มาแล้ว{at ? ` ${bkkTime(at)}` : ""}
                           </label>
                         ); })()}
-                        <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}</span>
-                        {b.tickets && <span style={{ fontSize: 11, fontWeight: 700, color: b.tickets === "included" ? "#2e7d4f" : "var(--ink-soft)", whiteSpace: "nowrap" }} title="Set by the operator">{b.tickets === "included" ? "Tickets incl." : "No tickets"}</span>}
+                        <span style={{ flex: 1, minWidth: 130, textDecoration: full ? "line-through" : "none", color: full ? "var(--danger)" : "inherit" }}><b>{b.name || "—"}</b>{b.bookingNo ? <span className="gs-ref"> · {b.bookingNo}</span> : ""}{(b.actualPax ?? b.bookedPax) != null ? <span className="gs-ref"> · {partial ? `${P - ns} of ${P}` : (b.actualPax ?? b.bookedPax)} pax</span> : ""}{(b.tickets === "included" || b.tickets === "not") && <span style={{ display: "inline-block", marginLeft: 6, verticalAlign: "middle" }}><TicketBadge tickets={b.tickets} /></span>}</span>
                         {b.bookingNo && guestContacts[b.bookingNo] && <WhatsAppButton href={guestContacts[b.bookingNo].whatsapp} display={guestContacts[b.bookingNo].display} name={b.name} />}
                         {canMarkNoShow ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
@@ -1147,6 +1163,9 @@ export default function JobSheetEditor() {
                     })}
                   </ol>
                 ) : <div className="gs-empty">No customer list yet.</div>}
+                {/* Extras (Tour Upsell PR3): the guide's own job only; draws nothing while the
+                    Route Extension switch is off or nothing is on sale here. */}
+                {role === "GUIDE" && <UpsellExtras guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />}
               </div>
               <div>
                 <h3>Payout</h3>
@@ -1156,13 +1175,15 @@ export default function JobSheetEditor() {
                     invisible to the guide it concerned. A guide who has already filed
                     their own report saw only their own figures and had no way to tell
                     that Folkpaths had recorded something different. */}
-                {exp.length ? (
+                {/* Company ADV rows (tickets) are not the guide's tour expenses — they are listed
+                    under Ticket receipts, upload-only (owner 2026-11-15). */}
+                {exp.filter((e) => !isAdvanceRow(e)).length ? (
                   <>
                   {canReport && <div className="gs-exp-head">Recorded by Folkpaths<small>ที่บริษัทบันทึกไว้</small></div>}
                   <ul className="gs-exp">
-                    {exp.map((e, i) => (
+                    {exp.filter((e) => !isAdvanceRow(e)).map((e, i) => (
                       <li key={i} style={{ flexWrap: "wrap" }}>
-                        <span>{e.description}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax{/inc\.?\s*guide/i.test(e.description ?? "") ? " (incl. guide)" : ""}</small></span>
+                        <span>{shownAs(e).label}{shownAs(e).recordedAs && <small className="gs-calc"> · recorded as “{shownAs(e).recordedAs}”</small>}<br /><small className="gs-calc">{thb(e.price ?? 0)} × {e.pax ?? 0} pax{/inc\.?\s*guide/i.test(e.description ?? "") ? " (incl. guide)" : ""}</small></span>
                         <b>{thb(expenseAmount(e))}</b>
                         {ro && <div className="gs-receipts" style={{ flexBasis: "100%", marginTop: 4 }}>
                           <ReceiptFiles compact sheetKey={sheet} row={e} index={sheet.expenses.indexOf(e)} files={(e.rowId && attachments[e.rowId]) || []}
@@ -1170,10 +1191,14 @@ export default function JobSheetEditor() {
                         </div>}
                       </li>
                     ))}
-                    <li className="gs-total"><span>Total expenses</span><b>{thb(exp.reduce((a, e) => a + expenseAmount(e), 0))}</b></li>
+                    <li className="gs-total"><span>Total expenses</span><b>{thb(exp.filter((e) => !isAdvanceRow(e)).reduce((a, e) => a + expenseAmount(e), 0))}</b></li>
                   </ul>
                   </>
                 ) : <div className="gs-empty">No expenses recorded.</div>}
+                {ro && (
+                  <GuideTicketReceipts sheetKey={sheet} rows={sheet.expenses.map((row, index) => ({ row, index })).filter(({ row }) => isAdvanceRow(row) && expenseAmount(row) > 0)}
+                    attachments={attachments} canUpload={role === "GUIDE" && !!sheet.ref} locked={isApproved(sheet.approvalStatus)} onChanged={receiptsChanged} />
+                )}
                 <div className="gs-payout">
                   {/* "Reimbursed" is a thing that has happened. Until the transfer is made it has
                       not, and telling a guide their money is back when it is not is the one
@@ -1190,7 +1215,7 @@ export default function JobSheetEditor() {
                   <div className="gs-payout-row gs-grand"><span>{payoutView.status === "final" ? "You received" : "You’ll receive"}{payoutView.status === "estimate" && <><br /><small className="gs-calc">Estimate · waiting for the operator to confirm · ประมาณการ รอ operator ยืนยัน</small></>}{payoutView.status === "confirmed" && <><br /><small className="gs-calc">Confirmed by the operator · waiting for the transfer · ยืนยันแล้ว รอโอน</small></>}</span><b>{thb(grandShown)}</b></div>
                 </div>
                 {payoutView.status !== "final" && payoutView.unspecified > 0 && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 6 }}>{thb(payoutView.unspecified)} of these expenses has no payer recorded yet — it is not in the figure above, and the payment waits until the operator records who paid. · มี {thb(payoutView.unspecified)} ที่ยังไม่ระบุผู้จ่าย ยังไม่รวมในยอดข้างบน และจะยังจ่ายไม่ได้จนกว่า operator จะระบุ</div>}
-                {hasAdvance && (() => {
+                {canEdit && hasAdvance && (() => {
                   // Money the guide already sent back that is not counted yet: a claim being
                   // checked, or confirmed money not yet put against an advance. A receipt is a
                   // transfer, not a job, so this is the guide's whole pending amount — shown
@@ -1231,6 +1256,13 @@ export default function JobSheetEditor() {
                   </div>
                   );
                 })()}
+                {/* A guide gets only their read-only Company ADV card (lib/advances/guide-card):
+                    the server never sends them the ledger. */}
+                {!canEdit && guideAdv && (
+                  <GuideAdvanceCard card={guideAdv} job={{ guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx, ref: sheet.ref }}
+                    onChanged={setGuideAdv}
+                    onUpload={() => document.querySelector(".gs-exp")?.scrollIntoView({ block: "start", behavior: "smooth" })} />
+                )}
                 {paid && (
                   <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--ok-bg, #eef7f0)", border: "1px solid var(--ok-line, #cfe6d6)", borderRadius: 8, fontSize: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontWeight: 700, color: "var(--green, #2f7d4f)" }}>
@@ -1246,7 +1278,9 @@ export default function JobSheetEditor() {
             {canReport && isFoodTourId(sheet.tourId) && (() => {
               // Food tour (owner, 2026-10-27): one figure — what the food cost — against the
               // food advance. No list of stops, no receipt required (lib/jobsheet foodCostRows).
-              const adv = advT.totalAdvancePaid;
+              // A guide is sent only their Company ADV card (lib/advances/guide-card), not the ledger:
+              // its amount is the transferred advance. Operators keep the ledger figure.
+              const adv = canEdit ? advT.totalAdvancePaid : (guideAdv?.amount ?? 0);
               const shown = foodSpent !== "" ? foodSpent : (reportedFoodCost(sheet.guideExpenses) || "").toString();
               const spent = Number(shown) || 0;
               const diff = Math.round((adv - spent) * 100) / 100;
@@ -1269,36 +1303,10 @@ export default function JobSheetEditor() {
               );
             })()}
             {canReport && !isFoodTourId(sheet.tourId) && (
-              <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
-                <h3 style={{ margin: "0 0 2px" }}>Report your expenses</h3>
-                <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 10 }}>Enter what you actually paid on tour, then submit — the operator cross-checks it against the sheet.</div>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead><tr style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--ink-soft)" }}>
-                    <th style={{ textAlign: "left", padding: "2px 4px" }}>Description</th><th style={{ width: 72, padding: "2px 4px" }}>Price</th><th style={{ width: 56, padding: "2px 4px" }}>Pax</th><th style={{ width: 84, textAlign: "right", padding: "2px 4px" }}>Amount</th><th style={{ width: 24 }}></th>
-                  </tr></thead>
-                  <tbody>
-                    {guideExp.map((e, i) => (
-                      <tr key={i}>
-                        <td style={{ padding: "3px 4px" }}><input style={L} value={e.description} placeholder="e.g. Grand Palace ticket" onChange={(ev) => setGExp(i, { description: ev.target.value })} /></td>
-                        <td style={{ padding: "3px 4px" }}><input style={{ ...L, textAlign: "right" }} type="number" value={e.price ?? ""} onChange={(ev) => setGExp(i, { price: numOrNull(ev.target.value) })} /></td>
-                        <td style={{ padding: "3px 4px" }}><input style={{ ...L, textAlign: "right" }} type="number" value={e.pax ?? ""} onChange={(ev) => setGExp(i, { pax: numOrNull(ev.target.value) })} /></td>
-                        <td style={{ padding: "3px 4px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{thb(expenseAmount(e))}</td>
-                        <td style={{ textAlign: "center" }}><button onClick={() => rmGExp(i)} title="Remove" style={{ border: "none", background: "none", color: "var(--ink-soft)", cursor: "pointer", fontSize: 14 }}>✕</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot><tr style={{ borderTop: "1.5px solid var(--line)" }}><td colSpan={3} style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>Total expenses</td><td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 800, color: "var(--primary)" }}>{thb(guideExpTotal)}</td><td></td></tr></tfoot>
-                </table>
-                <div style={{ marginTop: 10 }}>
-                  <label style={{ fontSize: 11, color: "var(--ink-soft)", fontWeight: 600 }}>Note (optional)</label>
-                  <textarea value={guideNote} maxLength={500} onChange={(e) => setGuideNote(e.target.value)} placeholder="e.g. bought extra water — very hot day" rows={2} style={{ width: "100%", boxSizing: "border-box", marginTop: 3, padding: "6px 8px", border: "1px solid var(--line,#d9d9d9)", borderRadius: 6, font: "inherit", fontSize: 13, resize: "vertical" }} />
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
-                  <button className="btn sm" onClick={addGExp}>+ Add expense</button>
-                  <button className="btn primary" disabled={expBusy} onClick={() => submitGuideExpenses()} style={{ marginLeft: "auto" }}>{expBusy ? "Sending…" : "Submit expenses to operator"}</button>
-                </div>
-                {sheet.guideExpensesAt && <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 8 }}>✓ Last sent {new Date(sheet.guideExpensesAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.</div>}
-              </div>
+              // Three fixed items only (owner 2026-11-15, lib/guide-fixed-expenses); tickets are under Ticket receipts.
+              <GuideTourExpenses sheetKey={sheet} reported={(sheet.guideExpenses ?? []) as ReportRow[]} official={sheet.expenses}
+                defaultPax={sheet.bookings.reduce((s2, b) => s2 + (b.actualPax ?? b.bookedPax ?? 0), 0) + 1 || null}
+                note={sheet.guideExpensesNote ?? null} sentAt={sheet.guideExpensesAt ?? null} onSubmitted={() => load()} />
             )}
             <div style={{ marginTop: 14, textAlign: "center" }}>
               <button className="btn" onClick={() => setShowFull((s) => !s)}>{showFull ? "Hide full details" : "📄 See full details"}</button>
@@ -1512,6 +1520,16 @@ export default function JobSheetEditor() {
         {/* TOUR EXPENSES — company cost in this job. Accounting mapping keys off
             the CATEGORY (lib/jobsheet), never the description. */}
         <div id="js-expenses" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
+        {canEdit && (
+          // Owner 2026-11-15: review the guide's three fixed items and the Company ADV ticket receipts
+          // here; the accounting rows below stay the job's record (lib/job-expense-review).
+          <OperatorExpenseReview sheetKey={sheet} jobRef={sheet.ref ?? null} guideLabel={header?.name ? `${sheet.guideId} ${header.name}` : sheet.guideId}
+            reported={(sheet.guideExpenses ?? []) as ReportRow[]} official={sheet.expenses} attachments={attachments}
+            accounts={expenseAccounts} history={reviewHist}
+            advances={advance.advances as never} settlement={advance.status}
+            locked={isApproved((sheet as { approvalStatus?: string | null }).approvalStatus) || !!payment?.paid}
+            onChanged={async (m) => { await load(); setMsg(m); }} />
+        )}
         <h3 className="js-section" style={{ background: "#fff8c4" }}>TOUR EXPENSES<small style={{ fontSize: 10, fontWeight: 500, color: "var(--ink-soft,#8a8f8b)", marginLeft: 5 }}>{"ค่าใช้จ่ายในการนำเที่ยว"}</small><span className="js-sub">Company cost in this job</span></h3>
         {rates && rates.titles.length > 0 && (
           <div className="js-rate-titles no-print" style={{ margin: "0 0 6px", fontSize: 11.5, color: "var(--ink-soft)" }}>
@@ -1576,7 +1594,26 @@ export default function JobSheetEditor() {
                       title="Fixed standard Job Sheet item">
                       {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
                     </select>
-                  ) : <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />;
+                  ) : <>
+                    <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />
+                    {/* Owner 2026-11-16: a cost the guide paid is Water / Bus / Ferry (Inc. Guide) here too —
+                        the server refuses anything else (lib/guide-fixed-expenses operatorRowProblems). */}
+                    {shownAs(e).recordedAs && isProtected(e as ProtectedRow) && (
+                      <div className="no-print js-fixed-row-alias" style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 3 }}>Reads as {shownAs(e).label} — kept as recorded (confirmed / certified rows are not renamed)</div>
+                    )}
+                    {operatorRowProblems([e], []).length > 0 && !isProtected(e as ProtectedRow) && (
+                      <div className="no-print js-fixed-row-hint" style={{ fontSize: 11, color: "var(--danger)", marginTop: 3, display: "grid", gap: 3 }}>
+                        <span>Paid by the guide → must be Water, Bus or Ferry (Inc. Guide), or set Paid By to Company.</span>
+                        <select aria-label="Change to a fixed item" style={{ ...L, cursor: "pointer" }} value="" onChange={(ev) => {
+                          const picked = STANDARD_EXPENSE_DESCRIPTIONS.find((item) => item.description === ev.target.value);
+                          if (picked) setExpense(i, { description: picked.description, expenseType: picked.expenseType });
+                        }}>
+                          <option value="">Change to…</option>
+                          {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </>;
                 })()}</td>
                 <td className="no-print">
                   {/* Payment source maps to the existing paidBy field; legacy rows (unset /
@@ -1847,7 +1884,10 @@ export default function JobSheetEditor() {
             <button className="btn sm ghost" style={{ marginLeft: "auto" }} onClick={() => setShowCross((v) => !v)}>{showCross ? "Hide comparison" : "Show comparison"}</button>
           </div>
         )}
-        {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && (!isApproved(sheet.approvalStatus) || showCross) && (() => {
+        {/* A report made only of the three fixed items is reviewed line by line in "Tour expenses"
+            above (owner 2026-11-15) — this whole-report comparison, whose "Accept guide's figures"
+            would undo a reviewed amount, is kept for older reports with other lines. */}
+        {canEdit && sheet.guideExpenses && sheet.guideExpenses.length > 0 && !sheet.guideExpenses.every((e) => !!fixedItemOf(e)) && (!isApproved(sheet.approvalStatus) || showCross) && (() => {
           const opTot = sheet.expenses.reduce((s, e) => s + expenseAmount(e), 0);
           const gdTot = sheet.guideExpenses!.reduce((s, e) => s + expenseAmount(e), 0);
           return (

@@ -22,6 +22,9 @@ const TABLES = [
   // AttesterSignature is keyed on User and holds a unique driveFileId — left behind, it
   // makes the NEXT test collide on a file id its own fake Drive just reissued.
   "ExpenseCertificate", "AttesterSignature", "HistoricalEvidenceReview",
+  // Tour Upsell: custody and settlements point at sales, payments and JobSheet; sales at
+  // product versions, which point at products and tax profiles.
+  "CashCustodyEntry", "CashSettlementReturn", "CashSettlement", "UpsellPayment", "UpsellSale", "UpsellProductVersion", "UpsellProduct", "TaxProfile", "UpsellDocCounter",
   "PaymentTransaction", "PaymentEvidence", "PaymentBatchItem", "PaymentBatch", "TourPayment", "PayrollStatus", "JobSheet", "Booking", "Assignment",
   // Calendar invitations (lib/tour-calendar-sync) and the Google connection they use.
   "TourCalendarEvent", "GoogleCalendar",
