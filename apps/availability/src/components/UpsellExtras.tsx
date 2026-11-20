@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import UpsellHandIn from "@/components/UpsellHandIn";
 
 // The Extras block on the guide's own job sheet (PR3, mockup approved 19 Nov 2026): sell a
 // Route Extension, record the cash taken, show the guest a payment confirmation, and see the
@@ -268,9 +269,10 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
     {x.sales.length > 0 && (
       <ul className="ups-sales" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 8 }}>
         {x.sales.map((s) => (
-          <li key={s.saleNo} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
+          <li key={s.saleNo} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 10, fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
             <span><b>{s.productName}</b> · {s.guests} {s.guests === 1 ? "guest" : "guests"}<br /><small style={{ color: C.soft, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{s.saleNo}</small><small style={{ color: C.soft }}> · cash · {time(s.recordedAt)}</small></span>
             <b>{baht(s.grossSatang)}</b>
+            {(x.cash.status === "NOT_SENT" || x.cash.status === "DRAFT" || x.cash.status === "RETURNED") && <ErrorReversal saleNo={s.saleNo} />}
           </li>
         ))}
       </ul>
@@ -285,5 +287,51 @@ export default function UpsellExtras({ guideId, date, slotIdx }: { guideId: stri
         <dt>Guide payout</dt><dd style={{ margin: 0, textAlign: "right" }}>Unchanged</dd>
       </dl>
     )}
+    {x.closed?.code === "REPORT_SENT" && <UpsellHandIn jobSheetId={x.jobSheetId} />}
   </>);
+}
+
+/** "This sale was recorded in error": the guide confirms the server's exact statement; an Admin
+ *  decides (only then does the cash held change). Not after the hand-in is sent or confirmed. */
+function ErrorReversal({ saleNo }: { saleNo: string }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const [agree, setAgree] = useState(false);
+  const [reason, setReason] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    setOpen(true); setMsg("");
+    const r = await fetch(`/api/upsell/sales/${encodeURIComponent(saleNo)}/reversal`, { cache: "no-store" });
+    if (r.ok) setText((await r.json()).affirmationText);
+  };
+  const submit = async () => {
+    setBusy(true);
+    const r = await fetch(`/api/upsell/sales/${encodeURIComponent(saleNo)}/reversal`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ affirmationText: text, reason }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    setMsg(r.ok ? "Sent to Admin — nothing changes until Admin approves it." : (d.reasons ?? [d.error]).join(" "));
+    if (r.ok) setOpen(false);
+  };
+  if (!open) return (
+    <div style={{ flexBasis: "100%" }}>
+      <button type="button" className="ups-error-reversal" onClick={() => void start()} style={{ minHeight: 40, padding: "0 10px", border: 0, background: "none", color: C.badInk, font: "inherit", fontSize: 13, fontWeight: 700, textDecoration: "underline", cursor: "pointer" }}>Recorded in error?</button>
+      {msg && <small role="status" style={{ display: "block", color: C.soft }}>{msg}</small>}
+    </div>
+  );
+  return (
+    <div className="ups-reversal-form" style={{ flexBasis: "100%", border: `1px solid ${C.badLine}`, background: C.badBg, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 8, color: C.badInk }}>
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13.5, minHeight: 44 }}>
+        <input type="checkbox" checked={agree} disabled={!text} onChange={(e) => setAgree(e.target.checked)} style={{ width: 20, height: 20, flex: "none", marginTop: 2 }} />
+        <span>{text ?? "…"}</span>
+      </label>
+      <label htmlFor={`ups-rev-${saleNo}`} style={{ fontWeight: 700, fontSize: 13.5 }}>What happened?</label>
+      <input id={`ups-rev-${saleNo}`} value={reason} onChange={(e) => setReason(e.target.value)} style={{ minHeight: 44, border: "1px solid #A1A1AA", borderRadius: 8, padding: "8px 10px", font: "inherit" }} placeholder="e.g. pressed Sell twice for the same guest" />
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" onClick={() => setOpen(false)} style={plain}>Cancel</button>
+        <button type="button" disabled={busy || !agree || reason.trim().length < 5} onClick={() => void submit()} style={{ ...plain, background: C.badInk, color: "#fff", borderColor: C.badInk }}>Send to Admin</button>
+      </div>
+      {msg && <small role="alert">{msg}</small>}
+    </div>
+  );
 }

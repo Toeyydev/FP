@@ -15,7 +15,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ jobSheetId
   return answer(async () => {
     const r = await reportTransfer(prisma, { userId: a.userId, guideId: a.guideId! }, {
       jobSheetId: (await ctx.params).jobSheetId, amountSatang: Number(b?.amountSatang), transferredAt: String(b?.transferredAt ?? ""),
-      bankRef: String(b?.bankRef ?? ""), slip: (b?.slip ?? {}) as { url?: string; evidenceId?: string }, requestKey: String(b?.requestKey ?? ""),
+      bankRef: String(b?.bankRef ?? ""), slip: { evidenceId: String((b?.slip as { evidenceId?: string } | undefined)?.evidenceId ?? "") }, requestKey: String(b?.requestKey ?? ""),
     });
     return { ok: true, replay: r.replay, transferId: r.transfer.id, seq: r.transfer.seq };
   });

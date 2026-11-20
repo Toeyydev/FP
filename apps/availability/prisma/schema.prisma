@@ -2509,6 +2509,7 @@ model CashSettlementSubmission {
   expectedSatang Int
   totalSatang    Int
   transferIds    String[]
+  coverage       Json           @default("[]") // the sales this submission hands in (frozen)
   status         String         @default("SUBMITTED") // SUBMITTED | RETURNED | CONFIRMED
   submittedById  String
   submittedAt    DateTime       @default(now())

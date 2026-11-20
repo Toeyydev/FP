@@ -14,6 +14,7 @@ import { recordRouteExtensionSale } from "./sales";
 import { setReceivingAccount } from "./settlement";
 import { GET as VIEW } from "@/app/api/upsell/hand-in/[jobSheetId]/route";
 import { POST as REPORT } from "@/app/api/upsell/hand-in/[jobSheetId]/transfers/route";
+import { POST as PREPARE } from "@/app/api/upsell/hand-in/[jobSheetId]/prepare/route";
 import { POST as SUBMIT } from "@/app/api/upsell/hand-in/[jobSheetId]/submit/route";
 import { POST as CONFIRM } from "@/app/api/upsell/settlements/[id]/confirm/route";
 import { GET as ACCOUNT_GET, POST as ACCOUNT_POST } from "@/app/api/upsell/receiving-account/route";
@@ -69,13 +70,22 @@ describe("Extras cash routes", () => {
 
   it("the round trip over HTTP; another guide, an Operator and an Accountant cannot write", async () => {
     await setReceivingAccount(prisma, { userId: adminId }, { peakPaymentMethodId: "pm-1", label: "Extras (example)", confirmSuitable: true }, async (id) => ({ id, name: "Invented Bank", bankAccountKey: "ACC:999007890", accountDisplay: "···7890" }));
-    const report = { amountSatang: 40000, transferredAt: new Date(Date.now() - 600_000).toISOString(), bankRef: "KB-7731-0099", slip: { url: "https://example.test/slip-99" }, requestKey: "route-transfer-key-0001" };
+    const ev = await prisma.paymentEvidence.create({ data: { googleDriveFileId: "drive-route-1", fileHash: "hash-route-1", driveLink: "https://example.test/slip-99", guideId: "G-981", slipUploadedBy: g1 } });
+    const report = { amountSatang: 40000, transferredAt: new Date(Date.now() - 600_000).toISOString(), bankRef: "KB-7731-0099", slip: { evidenceId: ev.id }, requestKey: "route-transfer-key-0001" };
     as(g2, "GUIDE", "G-982");
     expect((await REPORT(req(report), p("jobSheetId", jobId))).status).toBe(403);
     expect((await VIEW(req(), p("jobSheetId", jobId))).status).toBe(403);
     as(opId, "OPERATOR");
     expect((await REPORT(req(report), p("jobSheetId", jobId))).status).toBe(403);
     expect((await VIEW(req(), p("jobSheetId", jobId))).status).toBe(200); // read only
+    as(g1, "GUIDE", "G-981");
+    // The code first — read-only GET makes none; prepare does, the same one every time.
+    expect((await call(await VIEW(req(), p("jobSheetId", jobId)))).body).toMatchObject({ settlementNo: null });
+    const code = await call(await PREPARE(req({}), p("jobSheetId", jobId)));
+    expect(code).toMatchObject({ status: 200, body: { settlementNo: expect.stringMatching(/^FOLK-CSH-/), memo: expect.stringMatching(/^FOLK-CSH-/) } });
+    expect((await call(await PREPARE(req({}), p("jobSheetId", jobId)))).body.settlementNo).toBe(code.body.settlementNo);
+    as(opId, "OPERATOR");
+    expect((await PREPARE(req({}), p("jobSheetId", jobId))).status).toBe(403);
     as(g1, "GUIDE", "G-981");
     const r = await call(await REPORT(req(report), p("jobSheetId", jobId)));
     expect(r).toMatchObject({ status: 200, body: { ok: true, seq: 1 } });

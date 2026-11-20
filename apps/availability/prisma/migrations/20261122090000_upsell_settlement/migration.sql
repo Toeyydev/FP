@@ -464,3 +464,20 @@ BEGIN
   NEW."version" := OLD."version" + 1;
   RETURN NEW;
 END $$ LANGUAGE plpgsql;
+
+-- ─── The hand-in code before the transfer (owner, 20 Nov 2026) ──────────────────────────────
+-- The guide prepares the hand-in after the end-tour report and BEFORE any bank transfer: its
+-- settlement no. (FOLK-CSH-…) is the code they put in the transfer's memo. It is a memo, never a
+-- bank reference: a transfer whose bank reference is the hand-in code is refused (the bank's own
+-- transaction reference stays the unique key of each real transfer). Each submission freezes the
+-- sales it covers (coverage), so what was handed in for what can always be read back.
+ALTER TABLE "CashSettlementSubmission" ADD COLUMN "coverage" JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE FUNCTION cash_settlement_transfer_not_memo() RETURNS trigger AS $$
+BEGIN
+  IF folk_tx_ref_key(NEW."bankRef") = (SELECT folk_tx_ref_key(s."settlementNo") FROM "CashSettlement" s WHERE s."id" = NEW."settlementId") THEN
+    RAISE EXCEPTION 'UPSELL_TRANSFER_MEMO_AS_REF: the hand-in code is the memo — enter the bank''s own transaction reference from the slip';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER cash_settlement_transfer_not_memo BEFORE INSERT ON "CashSettlementTransfer" FOR EACH ROW EXECUTE FUNCTION cash_settlement_transfer_not_memo();

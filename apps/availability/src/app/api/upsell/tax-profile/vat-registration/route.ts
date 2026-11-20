@@ -5,6 +5,15 @@ import { setVatRegistration } from "@/lib/upsell/tax-profile";
 
 export const dynamic = "force-dynamic";
 
+// GET — the upsell tax profile's VAT-registration answer and where it came from (finance reads).
+export async function GET() {
+  const a = await cashActor();
+  if (a instanceof NextResponse) return a;
+  const no = only(a, "ADMIN", "OPERATOR", "ACCOUNTANT"); if (no) return no;
+  const t = await prisma.taxProfile.findUnique({ where: { code: "UPSELL-STD" }, select: { code: true, status: true, vatRegistration: true, vatRegistrationSource: true, vatRegistrationAt: true, peakDocumentKind: true } });
+  return NextResponse.json({ profile: t });
+}
+
 // POST { code, vatRegistration: NOT_REGISTERED | REGISTERED, source } — ADMIN: whether the company is
 // VAT-registered, with where the answer came from. Audited; the profile stays DRAFT.
 export async function POST(req: NextRequest) {

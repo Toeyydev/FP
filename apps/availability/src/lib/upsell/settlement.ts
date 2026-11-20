@@ -24,6 +24,7 @@ export class SettlementError extends Error {
 }
 const refuse = (status: number, code: string, message: string): never => { throw new SettlementError(status, code, message); };
 
+const folkKey = (ref: string | null | undefined) => (ref ?? "").normalize("NFKC").replace(/[๐-๙]/g, (d) => String("๐๑๒๓๔๕๖๗๘๙".indexOf(d))).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 const thb = (satang: number) => `฿${(satang / 100).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 const bangkokDate = (d: Date) => new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
 
@@ -54,19 +55,33 @@ async function step<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
 
 // ── What the job shows ─────────────────────────────────────────────────────────────────────
 
+/** The sales a job's hand-in covers: each Sale Ref, product and amount still owed in cash. */
+async function coverageOf(db: Db | Tx, guideId: string, jobSheetId: string) {
+  const sales = await db.upsellSale.findMany({ where: { sourceJobSheetId: jobSheetId, payments: { some: { method: "CASH", cashCollectorId: guideId } } }, orderBy: { createdAt: "asc" },
+    select: { saleNo: true, grossSatang: true, status: true, guests: true, ruleSnapshot: true } });
+  return sales.map((x) => ({ saleNo: x.saleNo, productName: ((x.ruleSnapshot as { product?: { name?: string } } | null)?.product?.name) ?? "Extra", guests: x.guests, grossSatang: x.grossSatang, status: x.status }));
+}
+
+/** What a guide writes in the transfer's memo: the hand-in code itself (short enough for a bank app). */
+export const bankMemo = (settlementNo: string) => settlementNo;
+
 export async function handInView(db: Db, guideId: string, jobSheetId: string) {
-  const [held, settlement, account] = await Promise.all([
+  const [held, settlement, account, coverage, job] = await Promise.all([
     heldOn(db, guideId, jobSheetId),
     db.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId, sourceJobSheetId: jobSheetId } }, include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "asc" } }, returns: { orderBy: { submissionNo: "asc" } } } }),
     currentReceivingAccount(db),
+    coverageOf(db, guideId, jobSheetId),
+    db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { ref: true } }),
   ]);
+  // Read only: a GET never makes a hand-in code — prepareHandIn does, once.
   return {
     heldSatang: held, toRemitSatang: held,
     status: settlement?.status ?? "NOT_SENT", settlementNo: settlement?.settlementNo ?? null, submissionNo: settlement?.submissionNo ?? 0,
+    memo: settlement ? bankMemo(settlement.settlementNo) : null, jobRef: job?.ref ?? null, coverage,
     returnedReason: settlement?.returnedReason ?? null,
     receivingAccount: account ? { id: account.id, version: account.version, label: account.label, display: account.accountDisplay } : null,
     transfers: (settlement?.transfers ?? []).map((t) => ({ id: t.id, seq: t.seq, amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), transferDate: t.transferDate, bankRef: t.bankRef, hasSlip: !!(t.slipUrl || t.evidenceId), toAccount: t.receivingAccountDisplay, status: t.status, withdrawnReason: t.withdrawnReason })),
-    history: (settlement?.submissions ?? []).map((s) => ({ submissionNo: s.submissionNo, totalSatang: s.totalSatang, transferIds: s.transferIds, status: s.status, submittedAt: s.submittedAt.toISOString(), returnedReason: s.returnedReason, returnedAt: s.returnedAt?.toISOString() ?? null, confirmedAt: s.confirmedAt?.toISOString() ?? null })),
+    history: (settlement?.submissions ?? []).map((s) => ({ coverage: s.coverage, submissionNo: s.submissionNo, totalSatang: s.totalSatang, transferIds: s.transferIds, status: s.status, submittedAt: s.submittedAt.toISOString(), returnedReason: s.returnedReason, returnedAt: s.returnedAt?.toISOString() ?? null, confirmedAt: s.confirmedAt?.toISOString() ?? null })),
   };
 }
 
@@ -81,7 +96,26 @@ async function guideJob(db: Db | Tx, guide: Guide, jobSheetId: string) {
   return job!;
 }
 
-export async function reportTransfer(db: Db, guide: Guide, input: { jobSheetId: string; amountSatang: number; transferredAt: string; bankRef: string; slip: { url?: string | null; evidenceId?: string | null }; requestKey: string }) {
+/**
+ * The hand-in code, BEFORE any bank transfer (owner, 20 Nov 2026): after the end-tour report, the
+ * guide's own job, while cash is owed. Idempotent — called again (a refresh, a retry, two taps at
+ * once) it returns the same code; one job, one code, kept through Return and resend.
+ */
+export async function prepareHandIn(db: Db, guide: Guide, input: { jobSheetId: string }) {
+  const job = await guideJob(db, guide, input.jobSheetId);
+  return step(db, async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "JobSheet" WHERE "id" = ${job.id} FOR UPDATE`;
+    let s = await tx.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId: guide.guideId, sourceJobSheetId: job.id } } });
+    if (!s) {
+      if ((await heldOn(tx, guide.guideId, job.id)) <= 0) refuse(409, "NOTHING_OWED", "No Extras cash is held on this job");
+      s = await tx.cashSettlement.create({ data: { settlementNo: await nextUpsellDocNo("FOLK-CSH", new Date(), tx), guideId: guide.guideId, sourceJobSheetId: job.id, expectedSatang: 0, remittedSatang: 0, method: "BANK_TRANSFER", status: "DRAFT" } });
+      await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_prepared", entityType: "CashSettlement", entityId: s.id, detail: { settlementNo: s.settlementNo, jobRef: job.ref } } });
+    }
+    return { settlementId: s.id, settlementNo: s.settlementNo, memo: bankMemo(s.settlementNo), status: s.status, jobRef: job.ref, owedSatang: await heldOn(tx, guide.guideId, job.id), coverage: await coverageOf(tx, guide.guideId, job.id) };
+  });
+}
+
+export async function reportTransfer(db: Db, guide: Guide, input: { jobSheetId: string; amountSatang: number; transferredAt: string; bankRef: string; slip: { evidenceId?: string | null }; requestKey: string }) {
   const key = (input.requestKey ?? "").trim();
   if (key.length < 8) refuse(400, "REQUEST_KEY", "Missing request key");
   const again = await db.cashSettlementTransfer.findUnique({ where: { requestKey: key } });
@@ -93,7 +127,10 @@ export async function reportTransfer(db: Db, guide: Guide, input: { jobSheetId: 
   const at = new Date(input.transferredAt);
   if (Number.isNaN(at.getTime()) || at.getTime() > Date.now() + 60_000) refuse(400, "TRANSFER_TIME", "Give the date and time the bank sent it — not in the future");
   if (!(input.bankRef ?? "").trim()) refuse(400, "BANK_REF", "Enter the bank reference from the slip");
-  if (!((input.slip?.url ?? "").trim() || (input.slip?.evidenceId ?? "").trim())) refuse(400, "SLIP", "Attach the slip of this transfer");
+  // The slip is evidence on file (uploaded through hand-in/[job]/slip), never a link the phone makes up.
+  const slip = (input.slip?.evidenceId ?? "").trim() ? await db.paymentEvidence.findUnique({ where: { id: input.slip.evidenceId! }, select: { id: true, driveLink: true, slipUploadedBy: true } }) : null;
+  if (!slip) refuse(400, "SLIP", "Attach the slip of this transfer");
+  if (slip!.slipUploadedBy && slip!.slipUploadedBy !== guide.userId) refuse(403, "SLIP", "Attach your own slip");
   const job = await guideJob(db, guide, input.jobSheetId);
   const account = await currentReceivingAccount(db);
   if (!account) refuse(409, "NO_RECEIVING_ACCOUNT", "The account for Extras cash is not set yet — keep the cash and slips, and contact Admin");
@@ -103,21 +140,21 @@ export async function reportTransfer(db: Db, guide: Guide, input: { jobSheetId: 
   return step(db, async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "JobSheet" WHERE "id" = ${job.id} FOR UPDATE`;
     if ((await heldOn(tx, guide.guideId, job.id)) <= 0) refuse(409, "NOTHING_OWED", "No Extras cash is held on this job");
-    let s = await tx.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId: guide.guideId, sourceJobSheetId: job.id } } });
-    if (!s) {
-      s = await tx.cashSettlement.create({ data: { settlementNo: await nextUpsellDocNo("FOLK-CSH", new Date(), tx), guideId: guide.guideId, sourceJobSheetId: job.id, expectedSatang: 0, remittedSatang: 0, method: "BANK_TRANSFER", status: "DRAFT" } });
-    }
-    if (s.status !== "DRAFT" && s.status !== "RETURNED") refuse(409, "HAND_IN_SENT", s.status === "SUBMITTED" ? "The hand-in is with Admin — wait for it to be confirmed or returned" : "This job's hand-in is closed");
-    const last = await tx.cashSettlementTransfer.aggregate({ where: { settlementId: s.id }, _max: { seq: true } });
+    // The code comes first (prepareHandIn): a transfer is made with it in the memo, then reported.
+    const s = await tx.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId: guide.guideId, sourceJobSheetId: job.id } } });
+    if (!s) refuse(409, "PREPARE_FIRST", "Get the hand-in code first and put it in the transfer's memo");
+    if (folkKey(input.bankRef) === folkKey(s!.settlementNo)) refuse(400, "MEMO_AS_REF", "That is the hand-in code (the memo) — enter the bank's own transaction reference from the slip");
+    if (s!.status !== "DRAFT" && s!.status !== "RETURNED") refuse(409, "HAND_IN_SENT", s!.status === "SUBMITTED" ? "The hand-in is with Admin — wait for it to be confirmed or returned" : "This job's hand-in is closed");
+    const last = await tx.cashSettlementTransfer.aggregate({ where: { settlementId: s!.id }, _max: { seq: true } });
     const transfer = await tx.cashSettlementTransfer.create({ data: {
-      settlementId: s.id, guideId: guide.guideId, seq: (last._max.seq ?? 0) + 1, amountSatang: input.amountSatang,
+      settlementId: s!.id, guideId: guide.guideId, seq: (last._max.seq ?? 0) + 1, amountSatang: input.amountSatang,
       transferredAt: at, transferDate: bangkokDate(at), bankRef: input.bankRef.trim(),
-      slipUrl: input.slip.url ?? null, evidenceId: input.slip.evidenceId ?? null,
+      slipUrl: slip!.driveLink ?? null, evidenceId: slip!.id,
       receivingAccountId: account!.id, receivingAccountKey: account!.bankAccountKey, receivingAccountDisplay: account!.accountDisplay,
       reportedById: guide.userId, requestKey: key,
     } });
     await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.transfer_reported", entityType: "CashSettlementTransfer", entityId: transfer.id,
-      detail: { settlementNo: s.settlementNo, seq: transfer.seq, amountSatang: transfer.amountSatang, transferredAt: at.toISOString(), bankRef: transfer.bankRef, toAccount: account!.accountDisplay, receivingAccountVersion: account!.version } } });
+      detail: { settlementNo: s!.settlementNo, seq: transfer.seq, amountSatang: transfer.amountSatang, transferredAt: at.toISOString(), bankRef: transfer.bankRef, toAccount: account!.accountDisplay, receivingAccountVersion: account!.version } } });
     return { transfer, replay: false };
   });
 }
@@ -158,7 +195,8 @@ export async function submitHandIn(db: Db, guide: Guide, input: { jobSheetId: st
     if (owed <= 0) refuse(409, "NOTHING_OWED", "No Extras cash is owed on this job");
     if (total !== owed) refuse(409, "NOT_EXACT", `The transfers add up to ${thb(total)}; ${thb(owed)} is owed. Only the exact amount is handed in — if you cannot, contact Admin`);
     const sent = await tx.cashSettlement.update({ where: { id: s.id }, data: { status: "SUBMITTED", method: "BANK_TRANSFER", expectedSatang: owed, remittedSatang: total } });
-    const submission = await tx.cashSettlementSubmission.create({ data: { settlementId: s.id, submissionNo: sent.submissionNo, expectedSatang: owed, totalSatang: total, transferIds: reported.map((t) => t.id), submittedById: guide.userId } });
+    const coverage = (await coverageOf(tx, guide.guideId, job.id)).filter((c) => c.status !== "REVERSED");
+    const submission = await tx.cashSettlementSubmission.create({ data: { settlementId: s.id, submissionNo: sent.submissionNo, expectedSatang: owed, totalSatang: total, transferIds: reported.map((t) => t.id), coverage: coverage as unknown as Prisma.InputJsonValue, submittedById: guide.userId } });
     await tx.auditLog.create({ data: { actorId: guide.userId, actorRole: "GUIDE", action: "upsell.hand_in_sent", entityType: "CashSettlement", entityId: s.id,
       detail: { settlementNo: sent.settlementNo, submissionNo: sent.submissionNo, totalSatang: total, transfers: reported.map((t) => ({ seq: t.seq, amountSatang: t.amountSatang, transferDate: t.transferDate, bankRef: t.bankRef, toAccount: t.receivingAccountDisplay })) } } });
     return { settlement: sent, submission };
@@ -208,13 +246,18 @@ export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId:
     const links = await tx.bankTransactionUse.findMany({ where: { sourceTable: "CashSettlementTransfer", sourceId: { in: sub.transferIds }, live: true } });
     const txOf = new Map(links.map((l) => [l.sourceId, l.transactionId]));
     if (txOf.size !== transfers.length) refuse(409, "BANK_LINK", "A transfer is not in the bank registry — contact the developer");
+    const jobRefNow = (await tx.jobSheet.findUnique({ where: { id: s.sourceJobSheetId }, select: { ref: true } }))?.ref ?? null;
     const groups = new Map<string, typeof transfers>();
     for (const t of transfers) groups.set(`${t.transferDate}|${t.receivingAccountId}`, [...(groups.get(`${t.transferDate}|${t.receivingAccountId}`) ?? []), t]);
     for (const [k, lines] of groups) {
       const [date, accountId] = k.split("|");
       await recordPeakEvent(tx, {
         kind: "BANK_CLEARING", sourceTable: "CashSettlementSubmission", sourceId: `${sub.id}:${date}:${accountId}`, eventDate: date,
-        payload: { reference: `${s.settlementNo}/${sub.submissionNo}/${date}`, settlementNo: s.settlementNo, submissionNo: sub.submissionNo, guideId: s.guideId, transferDate: date,
+        // The hand-in code is the memo the guide put on the transfer: it is the journal's reference
+        // and leads its description, with the job and the sales it covers (frozen per submission).
+        payload: { reference: `${s.settlementNo}/${sub.submissionNo}/${date}`, settlementNo: s.settlementNo, memo: bankMemo(s.settlementNo), submissionNo: sub.submissionNo, guideId: s.guideId, transferDate: date,
+          jobRef: jobRefNow, saleRefs: (sub.coverage as { saleNo: string }[]).map((c) => c.saleNo),
+          description: `Extras hand-in ${s.settlementNo} · ${jobRefNow ?? "job"} · ${s.guideId} · ${(sub.coverage as { saleNo: string }[]).map((c) => c.saleNo).join(", ")}`.slice(0, 250),
           receivingAccountId: accountId, receivingAccountKey: lines[0].receivingAccountKey, totalSatang: lines.reduce((n, t) => n + t.amountSatang, 0),
           lines: lines.map((t) => ({ transferId: t.id, bankTransactionId: txOf.get(t.id), amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), bankRef: t.bankRef })) },
         needs: { guideCashHeld: true, receivingAccountId: accountId },
@@ -365,4 +408,28 @@ export async function setReceivingAccount(db: Db, admin: Admin, input: { peakPay
       detail: { version: a.version, label: a.label, peakPaymentMethodId: a.peakPaymentMethodId, display: a.accountDisplay } } });
     return a;
   });
+}
+
+// ── Lists for the Admin's Extras cash page ─────────────────────────────────────────────────
+
+export async function listHandIns(db: Db, opts: { status?: string[] } = {}) {
+  const rows = await db.cashSettlement.findMany({
+    where: opts.status?.length ? { status: { in: opts.status } } : { status: { not: "DRAFT" } },
+    orderBy: [{ updatedAt: "desc" }], take: 200,
+    include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "desc" }, take: 1 }, sourceJobSheet: { select: { ref: true, date: true } } },
+  });
+  return Promise.all(rows.map(async (s) => ({
+    id: s.id, settlementNo: s.settlementNo, guideId: s.guideId, jobRef: s.sourceJobSheet.ref, jobDate: s.sourceJobSheet.date, status: s.status, submissionNo: s.submissionNo,
+    returnedReason: s.returnedReason, owedSatang: await heldOn(db, s.guideId, s.sourceJobSheetId),
+    submission: s.submissions[0] ? { submissionNo: s.submissions[0].submissionNo, totalSatang: s.submissions[0].totalSatang, transferIds: s.submissions[0].transferIds, status: s.submissions[0].status,
+      saleRefs: (s.submissions[0].coverage as { saleNo: string }[]).map((c) => c.saleNo) } : null,
+    transfers: s.transfers.map((t) => ({ id: t.id, seq: t.seq, amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), bankRef: t.bankRef, slipUrl: t.slipUrl, toAccount: t.receivingAccountDisplay, status: t.status, withdrawnReason: t.withdrawnReason })),
+  })));
+}
+
+export async function listReversals(db: Db, opts: { status?: string } = {}) {
+  const rows = await db.upsellSaleReversal.findMany({ where: opts.status ? { status: opts.status } : {}, orderBy: { createdAt: "desc" }, take: 200, include: { sale: { select: { saleNo: true, grossSatang: true, sellingGuideId: true, sourceJobSheet: { select: { ref: true } } } } } });
+  return rows.map((r) => ({ id: r.id, kind: r.kind, status: r.status, reason: r.reason, saleNo: r.sale.saleNo, grossSatang: r.sale.grossSatang, guideId: r.sale.sellingGuideId, jobRef: r.sale.sourceJobSheet.ref,
+    guideAffirmationText: r.guideAffirmationText, guideAffirmedAt: r.guideAffirmedAt?.toISOString() ?? null, refundAmountSatang: r.refundAmountSatang, refundPaidBy: r.refundPaidBy,
+    refundEvidenceUrl: r.refundEvidenceUrl, decidedAt: r.decidedAt?.toISOString() ?? null, decisionNote: r.decisionNote, createdAt: r.createdAt.toISOString() }));
 }

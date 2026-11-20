@@ -578,6 +578,15 @@ jobs:
 
       # Payments > Bank transfers (PR4-0b): finance reads, an Admin corrects; review never hides a
       # real reference; evidence is filed first; re-record hands off to Record payment, ref fixed.
+      # Extras cash hand-in (PR4): the hand-in code shown before any transfer, a transfer with its
+      # actual time and slip (fake Drive), Return keeps the code, Admin confirms once; 390 px.
+      - name: Extras cash hand-in in a real browser
+        run: node scripts/e2e/upsell-handin.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-handin
+
       - name: Bank transfers review and corrections in a real browser
         run: node scripts/e2e/bank-transfers.mjs
         env:

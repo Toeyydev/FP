@@ -11,7 +11,7 @@ import { seedUpsellProducts } from "./catalog";
 import { addDays, bangkokToday } from "./products";
 import { recordRouteExtensionSale } from "./sales";
 import {
-  SettlementError, confirmHandIn, decideReversal, errorAffirmationText, handInView, reportTransfer, requestErrorReversal,
+  SettlementError, confirmHandIn, prepareHandIn, decideReversal, errorAffirmationText, handInView, reportTransfer, requestErrorReversal,
   requestRefundReversal, returnHandIn, setReceivingAccount, submitHandIn, withdrawTransfer,
 } from "./settlement";
 import { ABSENCE_GRACE_MS, UpsellPeakRefused, recordRevenueRecognition, recoverExpiredLeases, resolveUncertain, sendPeakEvent, type UpsellPeakAdapter } from "./peak-outbox";
@@ -41,8 +41,16 @@ async function sale(guests: number, g = guide, onJob = jobId) {
 const endTour = (guideId: string, slotIdx: number) => prisma.tourReport.create({ data: { guideId, date: TODAY, slotIdx, tourId: TOUR } });
 const account = (n: string) => setReceivingAccount(prisma, admin, { peakPaymentMethodId: `pm-${n}`, label: `Extras ${n} (example)`, confirmSuitable: true },
   async (id) => ({ id, name: `Invented Bank ${n}`, bankAccountKey: `ACC:99900${n}`, accountDisplay: `···${n}` }));
-const transfer = (amountSatang: number, bankRef: string, g = guide, onJob = jobId, at = ago(30)) =>
-  reportTransfer(prisma, g, { jobSheetId: onJob, amountSatang, transferredAt: at, bankRef, slip: { url: `https://example.test/slip-${bankRef}` }, requestKey: key() });
+/** The guide's slip, filed as evidence (as hand-in/[job]/slip files it). */
+async function slipOf(g: { userId: string; guideId: string }) {
+  const n = Math.random().toString(36).slice(2, 12);
+  return (await prisma.paymentEvidence.create({ data: { googleDriveFileId: `drive-${n}`, fileHash: `hash-${n}`, driveLink: `https://example.test/slip-${n}`, guideId: g.guideId, slipUploadedBy: g.userId } })).id;
+}
+/** As the app does it: the hand-in code first (idempotent; refusals surface from reportTransfer), then the transfer. */
+const transfer = async (amountSatang: number, bankRef: string, g = guide, onJob = jobId, at = ago(30)) => {
+  await prepareHandIn(prisma, g, { jobSheetId: onJob }).catch(() => {});
+  return reportTransfer(prisma, g, { jobSheetId: onJob, amountSatang, transferredAt: at, bankRef, slip: { evidenceId: await slipOf(g) }, requestKey: key() });
+};
 const held = async (g = G, onJob = jobId) => (await prisma.cashCustodyEntry.aggregate({ where: { custodianId: g, sourceJobSheetId: onJob }, _sum: { amountSatang: true } }))._sum.amountSatang ?? 0;
 
 beforeAll(requireTestDatabase);
@@ -133,6 +141,9 @@ describe("the guide hands in the Extras cash", () => {
 
   it("each transfer keeps its amount, actual date, reference, slip and the account as it was; never edited", async () => {
     await ready();
+    // A slip must be on file, and the guide's own.
+    expect(await code(reportTransfer(prisma, guide, { jobSheetId: jobId, amountSatang: 100, transferredAt: ago(5), bankRef: "KB-X-1", slip: { evidenceId: "made-up" }, requestKey: key() }))).toBe("SLIP");
+    expect(await code(reportTransfer(prisma, guide, { jobSheetId: jobId, amountSatang: 100, transferredAt: ago(5), bankRef: "KB-X-1", slip: { evidenceId: await slipOf(guide2) }, requestKey: key() }))).toBe("SLIP");
     const { transfer: t1 } = await transfer(60000, "KB-7731-0042", guide, jobId, "2099-01-01T00:00:00Z").catch(() => ({ transfer: null as never }));
     expect(t1).toBeNull(); // a date in the future is refused …
     const at = ago(45);
@@ -141,7 +152,7 @@ describe("the guide hands in the Extras cash", () => {
     await expect(prisma.cashSettlementTransfer.update({ where: { id: r.transfer.id }, data: { amountSatang: 1 } })).rejects.toThrow(/UPSELL_TRANSFER_KEPT/);
     await expect(prisma.cashSettlementTransfer.delete({ where: { id: r.transfer.id } })).rejects.toThrow(/UPSELL_TRANSFER_KEPT/);
     // The same request again is the same transfer.
-    const again = await reportTransfer(prisma, guide, { jobSheetId: jobId, amountSatang: 60000, transferredAt: at, bankRef: "KB-7731-0042", slip: { url: "x" }, requestKey: r.transfer.requestKey });
+    const again = await reportTransfer(prisma, guide, { jobSheetId: jobId, amountSatang: 60000, transferredAt: at, bankRef: "KB-7731-0042", slip: { evidenceId: r.transfer.evidenceId }, requestKey: r.transfer.requestKey });
     expect(again).toMatchObject({ replay: true, transfer: { id: r.transfer.id } });
     // A new account version later never relabels it.
     await account("1234");
@@ -178,6 +189,73 @@ describe("the guide hands in the Extras cash", () => {
     expect(await code(transfer(20000, "KB-7731-0042", guide2, job2Id))).toBe("BANK_TRANSFER_USED");
     await prisma.guideAdvanceReceipt.create({ data: { receiptNo: "FOLK-ADR-209911-001", guideId: G2, receivedDate: TODAY, amountSatang: 20000, bankRef: "KB-ADV-1001", bankAccountKey: "ACC:999007890", status: "VERIFIED", verifiedAt: new Date() } });
     expect(await code(transfer(20000, "KB-ADV-1001", guide2, job2Id))).toBe("BANK_TRANSFER_USED");
+  });
+});
+
+describe("the hand-in code exists before the transfer (owner, 20 Nov 2026)", () => {
+  it("prepare: after the end-tour report, own job, cash owed — and reading never makes a code", async () => {
+    await sale(3); await sale(1);
+    expect(await code(prepareHandIn(prisma, guide, { jobSheetId: jobId }))).toBe("REPORT_NOT_SENT");
+    await endTour(G, 2);
+    expect(await code(prepareHandIn(prisma, guide2, { jobSheetId: jobId }))).toBe("NOT_YOUR_JOB");
+    const before = await handInView(prisma, G, jobId);
+    expect(before).toMatchObject({ settlementNo: null, memo: null, status: "NOT_SENT" });
+    expect(before.coverage.map((c) => c.grossSatang)).toEqual([60000, 20000]);
+    expect(await prisma.cashSettlement.count()).toBe(0); // a GET mints nothing
+    const p = await prepareHandIn(prisma, guide, { jobSheetId: jobId });
+    expect(p).toMatchObject({ settlementNo: expect.stringMatching(/^FOLK-CSH-\d{6}-\d{3}$/), owedSatang: 80000, status: "DRAFT" });
+    expect(p.memo).toBe(p.settlementNo);
+    expect(p.coverage.map((c) => [c.productName, c.grossSatang])).toEqual([[expect.any(String), 60000], [expect.any(String), 20000]]);
+    expect(p.jobRef).toBeTruthy();
+    // Before the account is set, the code is still the guide's to see; the transfer waits.
+    expect((await handInView(prisma, G, jobId)).memo).toBe(p.settlementNo);
+    // Nothing owed elsewhere: no code.
+    await endTour(G2, 3);
+    expect(await code(prepareHandIn(prisma, guide2, { jobSheetId: job2Id }))).toBe("NOTHING_OWED");
+  });
+
+  it("the same code on retry and under concurrency — one hand-in per job, one number taken", async () => {
+    await sale(2); await endTour(G, 2);
+    const others = [new PrismaClient(), new PrismaClient()];
+    try {
+      const all = await Promise.all([prisma, ...others].map((db) => prepareHandIn(db, guide, { jobSheetId: jobId })));
+      expect(new Set(all.map((x) => x.settlementNo)).size).toBe(1);
+      expect(await prisma.cashSettlement.count()).toBe(1);
+      expect((await prepareHandIn(prisma, guide, { jobSheetId: jobId })).settlementNo).toBe(all[0].settlementNo);
+      expect((await prisma.upsellDocCounter.findMany({ where: { key: { startsWith: "FOLK-CSH" } } })).map((c) => c.lastSeq)).toEqual([1]);
+    } finally { for (const o of others) await o.$disconnect(); }
+  });
+
+  it("a transfer needs the code first; the code is the memo, never the bank reference", async () => {
+    await sale(1); await endTour(G, 2); await account("7890");
+    expect(await code(reportTransfer(prisma, guide, { jobSheetId: jobId, amountSatang: 20000, transferredAt: ago(5), bankRef: "KB-7731-0042", slip: { evidenceId: await slipOf(guide) }, requestKey: key() }))).toBe("PREPARE_FIRST");
+    const p = await prepareHandIn(prisma, guide, { jobSheetId: jobId });
+    expect(await code(reportTransfer(prisma, guide, { jobSheetId: jobId, amountSatang: 20000, transferredAt: ago(5), bankRef: p.settlementNo.toLowerCase().replace(/-/g, " "), slip: { evidenceId: await slipOf(guide) }, requestKey: key() }))).toBe("MEMO_AS_REF");
+    const s = await prisma.cashSettlement.findFirstOrThrow();
+    await expect(prisma.cashSettlementTransfer.create({ data: { settlementId: s.id, guideId: G, seq: 9, amountSatang: 1, transferredAt: new Date(), transferDate: TODAY, bankRef: p.settlementNo, evidenceId: "x",
+      receivingAccountId: (await prisma.upsellReceivingAccount.findFirstOrThrow()).id, receivingAccountKey: "ACC:999007890", receivingAccountDisplay: "···7890", reportedById: guide.userId, requestKey: key() } })).rejects.toThrow(/UPSELL_TRANSFER_MEMO_AS_REF/);
+    // Two real transfers under the one memo keep their own bank references.
+    await transfer(10000, "KB-7731-0042"); await transfer(10000, "KB-7731-0043");
+    expect((await prisma.cashSettlementTransfer.findMany()).map((t) => t.bankRef).sort()).toEqual(["KB-7731-0042", "KB-7731-0043"]);
+  });
+
+  it("Return keeps the same code; each submission freezes the sales it covers; PEAK clearing carries code, job and sales", async () => {
+    await ready();
+    const p = await prepareHandIn(prisma, guide, { jobSheetId: jobId });
+    const a = (await transfer(60000, "KB-7731-0042")).transfer, b = (await transfer(20000, "KB-7731-0057")).transfer;
+    const first = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [a.id, b.id] });
+    expect((first.submission.coverage as { saleNo: string }[]).length).toBe(2);
+    await returnHandIn(prisma, admin, { settlementId: first.settlement.id, submissionNo: 1, reason: "checking the statement (example)" });
+    expect((await prepareHandIn(prisma, guide, { jobSheetId: jobId })).settlementNo).toBe(p.settlementNo);
+    const second = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [a.id, b.id] });
+    expect(second.settlement.settlementNo).toBe(p.settlementNo);
+    expect(second.submission.submissionNo).toBe(2);
+    await expect(prisma.cashSettlementSubmission.update({ where: { id: second.submission.id }, data: { coverage: [] } })).rejects.toThrow(/UPSELL_SUBMISSION_KEPT/);
+    await confirmHandIn(prisma, admin, { settlementId: second.settlement.id, submissionNo: 2, transferIds: [a.id, b.id] });
+    const clearing = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "BANK_CLEARING" } });
+    const sales = (await prisma.upsellSale.findMany({ orderBy: { createdAt: "asc" } })).map((x) => x.saleNo);
+    expect(clearing.payload).toMatchObject({ settlementNo: p.settlementNo, memo: p.settlementNo, jobRef: p.jobRef, saleRefs: sales, description: expect.stringContaining(p.settlementNo) });
+    expect((clearing.payload as { reference: string }).reference.length).toBeLessThanOrEqual(32);
   });
 });
 
