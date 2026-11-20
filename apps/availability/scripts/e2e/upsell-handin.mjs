@@ -50,6 +50,10 @@ const AUTH_SECRET = process.env.AUTH_SECRET || "e2e-only-not-a-real-secret-01234
 const ADMIN = "admin-cash@example.test", GUIDE = "g985@example.test", OPS = "ops-cash@example.test";
 const GUIDE_ID = "G-985", TOUR = "T-005", SLOT = 3; // Wat Phrakaew & Grand Palace, 14:00
 const TODAY = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+// What the Admin reads off the slip: half an hour ago, Bangkok time. A fixed clock time (09:15)
+// is "in the future" — refused by the server — whenever the run starts before 09:15 in Bangkok.
+const SLIP_AT = new Date(Date.now() - 30 * 60_000 + 7 * 3600_000).toISOString();
+const SLIP_DATE = SLIP_AT.slice(0, 10), SLIP_TIME = SLIP_AT.slice(11, 16);
 const JOB_PATH = `/job-sheet?guideId=${GUIDE_ID}&date=${TODAY}&slotIdx=${SLOT}`;
 
 const prisma = new PrismaClient();
@@ -219,8 +223,8 @@ try {
     await desk.waitForSelector(".js-slip-review");
     await setVal('.js-slip-review input[aria-label="Amount on the slip"]', String(amountBaht));
     await setVal('.js-slip-review input[aria-label="Bank reference"]', "KB E2E 7731 0042");
-    await setVal('.js-slip-review input[aria-label="Date on the slip"]', TODAY);
-    await setVal('.js-slip-review input[aria-label="Time on the slip"]', "09:15");
+    await setVal('.js-slip-review input[aria-label="Date on the slip"]', SLIP_DATE);
+    await setVal('.js-slip-review input[aria-label="Time on the slip"]', SLIP_TIME);
   };
   await goto(desk, "/upsell-cash");
   await desk.waitForSelector(".js-confirm");
@@ -269,8 +273,8 @@ try {
   await desk.waitForFunction(() => /Confirmed/.test(document.querySelector(".js-handins")?.textContent ?? ""), { timeout: 10000 });
   check("Confirm waits for the reviewed slip to be ticked, then confirms", disabledFirst === true);
   const t = await prisma.cashSettlementTransfer.findFirst();
-  check("the transfer carries the Admin's facts from the slip (amount, 09:15, ref, account)", t?.amountSatang === owed && t?.bankRef === "KB E2E 7731 0042" && t?.receivingAccountDisplay === "···7890"
-    && new Date(t.transferredAt.getTime() + 7 * 3600_000).toISOString().slice(11, 16) === "09:15", JSON.stringify({ a: t?.amountSatang, r: t?.bankRef }));
+  check("the transfer carries the Admin's facts from the slip (amount, slip time, ref, account)", t?.amountSatang === owed && t?.bankRef === "KB E2E 7731 0042" && t?.receivingAccountDisplay === "···7890"
+    && new Date(t.transferredAt.getTime() + 7 * 3600_000).toISOString().slice(11, 16) === SLIP_TIME, JSON.stringify({ a: t?.amountSatang, r: t?.bankRef }));
   check("confirmed: cash held 0, one remittance", (await held()) === 0 && (await prisma.cashCustodyEntry.count({ where: { kind: "REMITTED" } })) === 1);
   check("the bank clearing is queued and blocked until configured (nothing sent to PEAK)", (await prisma.upsellPeakEvent.count({ where: { eventKind: "BANK_CLEARING", status: "BLOCKED" } })) === 1);
   await goto(desk, "/upsell-cash");
