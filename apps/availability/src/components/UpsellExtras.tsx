@@ -315,7 +315,7 @@ function ErrorReversal({ saleNo }: { saleNo: string }) {
   };
   if (!open) return (
     <div style={{ flexBasis: "100%" }}>
-      <button type="button" className="ups-error-reversal" onClick={() => void start()} style={{ minHeight: 40, padding: "0 10px", border: 0, background: "none", color: C.badInk, font: "inherit", fontSize: 13, fontWeight: 700, textDecoration: "underline", cursor: "pointer" }}>Recorded in error?</button>
+      <button type="button" className="ups-error-reversal" onClick={() => void start()} style={{ minHeight: 44, padding: "0 10px", border: 0, background: "none", color: C.badInk, font: "inherit", fontSize: 13, fontWeight: 700, textDecoration: "underline", cursor: "pointer" }}>Recorded in error?</button>
       {msg && <small role="status" style={{ display: "block", color: C.soft }}>{msg}</small>}
     </div>
   );
