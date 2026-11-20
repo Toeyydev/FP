@@ -2,7 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { bankTxPrecheck, bankTxRefusal } from "@/lib/bank-transactions";
 import { bangkokToday } from "@/lib/payments-v2/rules";
 import { nextUpsellDocNo } from "./counter";
-import { recordPeakEvent, UNDECIDED_REVERSAL_DOCUMENT } from "./peak-outbox";
+import { cancelPeakEvent, recordPeakEvent, UNDECIDED_REVERSAL_DOCUMENT } from "./peak-outbox";
 
 // Tour Upsell PR4 — the guide hands in the Extras cash of one job; an Admin confirms or returns
 // it; a sale can be reversed (owner + Codex, 19–20 Nov 2026; mockups/pr4-upsell-settlement-v9a).
@@ -179,6 +179,15 @@ async function lockSubmitted(tx: Tx, settlementId: string, submissionNo: number)
 export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId: string; submissionNo: number; transferIds: string[] }) {
   return step(db, async (tx) => {
     await requireAdmin(tx, admin);
+    // Pressed again (or a second Admin at once): the same confirmation answers as confirmed, and
+    // nothing is written a second time — one remittance, one set of PEAK events.
+    const [now0] = await tx.$queryRaw<{ status: string; submissionNo: number }[]>`SELECT "status", "submissionNo" FROM "CashSettlement" WHERE "id" = ${input.settlementId} FOR UPDATE`;
+    if (now0?.status === "CONFIRMED" && now0.submissionNo === input.submissionNo) {
+      const done = await tx.cashSettlementSubmission.findUnique({ where: { settlementId_submissionNo: { settlementId: input.settlementId, submissionNo: input.submissionNo } } });
+      if (done?.status === "CONFIRMED" && [...new Set(input.transferIds ?? [])].sort().join() === [...done.transferIds].sort().join()) {
+        return tx.cashSettlement.findUniqueOrThrow({ where: { id: input.settlementId } });
+      }
+    }
     const { s, sub } = await lockSubmitted(tx, input.settlementId, input.submissionNo);
     if ([...new Set(input.transferIds ?? [])].sort().join() !== [...sub.transferIds].sort().join()) refuse(409, "NOT_ALL_TICKED", "Tick every transfer of this submission once you have seen it on the statement");
     // The ledger now must still be what was sent (a sale reversed meanwhile changes it: return it).
@@ -191,18 +200,27 @@ export async function confirmHandIn(db: Db, admin: Admin, input: { settlementId:
       idempotencyKey: `REMITTED:${s.id}:${sub.submissionNo}`, createdById: admin.userId, note: `Hand-in ${s.settlementNo} submission ${sub.submissionNo}` } });
     await tx.cashSettlementSubmission.update({ where: { id: sub.id }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now } });
     const confirmed = await tx.cashSettlement.update({ where: { id: s.id }, data: { status: "CONFIRMED", confirmedById: admin.userId, confirmedAt: now } });
-    // The bank-clearing event, linked to each central transfer (each cleared into PEAK once).
+    // Bank clearing: one event per actual Bangkok transfer date and receiving account — what one
+    // daily journal on that bank account would hold — each line linked to its central transfer,
+    // each transfer cleared into PEAK once. A transfer to an earlier account version clears to
+    // that account, as reported.
     const transfers = await tx.cashSettlementTransfer.findMany({ where: { id: { in: sub.transferIds } }, orderBy: { seq: "asc" } });
     const links = await tx.bankTransactionUse.findMany({ where: { sourceTable: "CashSettlementTransfer", sourceId: { in: sub.transferIds }, live: true } });
     const txOf = new Map(links.map((l) => [l.sourceId, l.transactionId]));
     if (txOf.size !== transfers.length) refuse(409, "BANK_LINK", "A transfer is not in the bank registry — contact the developer");
-    await recordPeakEvent(tx, {
-      kind: "BANK_CLEARING", sourceTable: "CashSettlementSubmission", sourceId: sub.id, eventDate: transfers.map((t) => t.transferDate).sort().at(-1)!,
-      payload: { reference: `${s.settlementNo}/${sub.submissionNo}`, settlementNo: s.settlementNo, submissionNo: sub.submissionNo, guideId: s.guideId, totalSatang: sub.totalSatang,
-        lines: transfers.map((t) => ({ transferId: t.id, bankTransactionId: txOf.get(t.id), amountSatang: t.amountSatang, transferDate: t.transferDate, bankRef: t.bankRef, receivingAccountKey: t.receivingAccountKey, receivingAccountId: t.receivingAccountId })) },
-      needs: { guideCashHeld: true, receivingAccountId: transfers[0].receivingAccountId, ...(new Set(transfers.map((t) => t.receivingAccountId)).size > 1 ? { blocked: ["The transfers went to different receiving accounts — clear each account with the accountant"] } : {}) },
-      bankTransactionIds: [...new Set(transfers.map((t) => txOf.get(t.id)!))],
-    });
+    const groups = new Map<string, typeof transfers>();
+    for (const t of transfers) groups.set(`${t.transferDate}|${t.receivingAccountId}`, [...(groups.get(`${t.transferDate}|${t.receivingAccountId}`) ?? []), t]);
+    for (const [k, lines] of groups) {
+      const [date, accountId] = k.split("|");
+      await recordPeakEvent(tx, {
+        kind: "BANK_CLEARING", sourceTable: "CashSettlementSubmission", sourceId: `${sub.id}:${date}:${accountId}`, eventDate: date,
+        payload: { reference: `${s.settlementNo}/${sub.submissionNo}/${date}`, settlementNo: s.settlementNo, submissionNo: sub.submissionNo, guideId: s.guideId, transferDate: date,
+          receivingAccountId: accountId, receivingAccountKey: lines[0].receivingAccountKey, totalSatang: lines.reduce((n, t) => n + t.amountSatang, 0),
+          lines: lines.map((t) => ({ transferId: t.id, bankTransactionId: txOf.get(t.id), amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), bankRef: t.bankRef })) },
+        needs: { guideCashHeld: true, receivingAccountId: accountId },
+        bankTransactionIds: [...new Set(lines.map((t) => txOf.get(t.id)!))],
+      });
+    }
     await tx.auditLog.create({ data: { actorId: admin.userId, actorRole: "ADMIN", action: "upsell.hand_in_confirmed", entityType: "CashSettlement", entityId: s.id,
       detail: { settlementNo: s.settlementNo, submissionNo: sub.submissionNo, totalSatang: sub.totalSatang, transferIds: sub.transferIds } } });
     return confirmed;
@@ -299,9 +317,19 @@ export async function decideReversal(db: Db, admin: Admin, input: { reversalId: 
         reversesId: collected.id, saleId: sale.id, idempotencyKey: `REVERSAL:${r!.id}`, createdById: admin.userId, note: `${r!.kind} · ${sale.saleNo}` } });
       await tx.upsellPayment.update({ where: { id: payment!.id }, data: { status: "REVERSED" } });
     }
+    // PEAK: money never received → its receipt must never be sent. Not in PEAK yet → cancelled
+    // here; possibly in PEAK (being sent, or uncertain) → refused until that is settled; in PEAK →
+    // a cancelling document follows. A refund keeps its receipt (the money was received).
+    const receipt = await tx.upsellPeakEvent.findUnique({ where: { eventKind_sourceTable_sourceId: { eventKind: "RECEIPT", sourceTable: "UpsellSale", sourceId: sale.id } } });
+    let receiptInPeak = receipt?.status === "POSTED";
+    if (receipt && (receipt.status === "SENDING" || receipt.status === "UNCERTAIN")) refuse(409, "PEAK_UNCERTAIN", "This sale's receipt may be in PEAK — settle it on the PEAK page first, then reverse");
+    if (r!.kind === "RECORDED_IN_ERROR" && receipt && !receiptInPeak) {
+      await cancelPeakEvent(tx, receipt.id, `${sale.saleNo} recorded in error (reversal ${r!.id}) — no money was received`);
+    }
+    if (r!.kind === "REFUNDED") receiptInPeak = true; // the refund is its own document either way
     await tx.upsellSale.update({ where: { id: sale.id }, data: { status: "REVERSED" } });
     await tx.upsellSaleReversal.update({ where: { id: r!.id }, data: { status: "APPROVED", decidedById: admin.userId, decidedAt: now, decisionNote: input.note ?? null } });
-    await recordPeakEvent(tx, {
+    if (receiptInPeak) await recordPeakEvent(tx, {
       kind: r!.kind === "REFUNDED" ? "SALE_REFUNDED" : "SALE_CANCELLED", sourceTable: "UpsellSaleReversal", sourceId: r!.id, eventDate: bangkokToday(),
       payload: { reference: sale.saleNo, saleId: sale.id, kind: r!.kind, amountSatang: r!.refundAmountSatang ?? sale.grossSatang, refundPaidBy: r!.refundPaidBy, guideCashReduced: reducesCash && !!collected },
       needs: { blocked: [UNDECIDED_REVERSAL_DOCUMENT] },

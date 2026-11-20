@@ -14,7 +14,8 @@ import {
   SettlementError, confirmHandIn, decideReversal, errorAffirmationText, handInView, reportTransfer, requestErrorReversal,
   requestRefundReversal, returnHandIn, setReceivingAccount, submitHandIn, withdrawTransfer,
 } from "./settlement";
-import { UpsellPeakRefused, resolveUncertain, sendPeakEvent, type UpsellPeakAdapter } from "./peak-outbox";
+import { ABSENCE_GRACE_MS, UpsellPeakRefused, recordRevenueRecognition, recoverExpiredLeases, resolveUncertain, sendPeakEvent, type UpsellPeakAdapter } from "./peak-outbox";
+import { setVatRegistration } from "./tax-profile";
 
 const TODAY = bangkokToday();
 const G = "G-961", G2 = "G-962", TOUR = "T-005";
@@ -72,17 +73,47 @@ async function ready() {
   await account("7890");
 }
 
-describe("PEAK events at the sale: receipt and revenue are distinct, frozen, blocked until configured", () => {
-  it("a sale queues a RECEIPT (payment date, via guide cash) and a REVENUE_RECOGNITION (service date), both BLOCKED with reasons", async () => {
+/** Walk an event to POSTED the way a sender does (PENDING → SENDING → POSTED). */
+async function postEvent(id: string) {
+  const e = await prisma.upsellPeakEvent.findUniqueOrThrow({ where: { id } });
+  if (e.status === "BLOCKED") await prisma.upsellPeakEvent.update({ where: { id }, data: { status: "PENDING", blockedReasons: [] } });
+  await prisma.upsellPeakEvent.update({ where: { id }, data: { status: "SENDING", leaseUntil: new Date(Date.now() + 60_000) } });
+  await prisma.upsellPeakEvent.update({ where: { id }, data: { status: "POSTED", leaseUntil: null, peakId: `peak-${id}`, peakCode: "RE-209911-0001" } });
+}
+
+describe("PEAK at the sale: one receipt carries a same-day service's income — no second revenue posting", () => {
+  it("a Route Extension queues ONE RECEIPT (payment date, via guide cash, crediting its revenue), BLOCKED with reasons", async () => {
     const s = await sale(2);
-    const events = await prisma.upsellPeakEvent.findMany({ orderBy: { eventKind: "asc" } });
-    expect(events.map((e) => [e.eventKind, e.status, e.eventDate])).toEqual([["RECEIPT", "BLOCKED", TODAY], ["REVENUE_RECOGNITION", "BLOCKED", TODAY]]);
-    expect(events[0].payload).toMatchObject({ reference: s.saleNo, paidVia: "UPSELL_GUIDE_CASH_HELD", grossSatang: 40000, revenueCategory: "UPSELL_ROUTE_REVENUE" });
-    expect(events[0].blockedReasons.join(" | ")).toMatch(/tax profile is not confirmed.*No PEAK account is mapped to Additional Tour Revenue \(Upsell\)/);
-    expect(events[0].blockedReasons.join(" | ")).toMatch(/UPSELL_GUIDE_CASH_HELD/);
+    const events = await prisma.upsellPeakEvent.findMany();
+    expect(events.map((e) => [e.eventKind, e.status, e.eventDate])).toEqual([["RECEIPT", "BLOCKED", TODAY]]);
+    expect(events[0].payload).toMatchObject({ reference: s.saleNo, paidVia: "UPSELL_GUIDE_CASH_HELD", grossSatang: 40000, credit: "UPSELL_ROUTE_REVENUE", deferred: false, serviceDate: TODAY, paymentDate: TODAY });
+    const why = events[0].blockedReasons.join(" | ");
+    expect(why).toMatch(/tax profile is not confirmed/);
+    expect(why).toMatch(/No PEAK account is mapped to Additional Tour Revenue \(Upsell\)/);
+    expect(why).toMatch(/UPSELL_GUIDE_CASH_HELD/);
+    expect(why).toMatch(/no-VAT document type is not confirmed/); // a new install records "not VAT-registered"
+    expect(why).not.toMatch(/VAT treatment/);
+    expect(events[0].mappingSnapshot).toMatchObject({ taxProfile: { vatRegistration: "NOT_REGISTERED" } });
+    // The service was given with the sale: a separate revenue posting is refused.
+    await expect(prisma.$transaction((tx) => recordRevenueRecognition(tx, { saleId: events[0].sourceId, saleNo: s.saleNo, grossSatang: 40000, revenueCategory: "UPSELL_ROUTE_REVENUE", taxProfileId: "x", serviceDate: TODAY }))).rejects.toThrow(/already carries the income/);
     await expect(prisma.upsellPeakEvent.update({ where: { id: events[0].id }, data: { payload: { reference: "tampered" } } })).rejects.toThrow(/UPSELL_PEAK_EVENT_KEPT/);
     await expect(prisma.upsellPeakEvent.update({ where: { id: events[0].id }, data: { status: "POSTED", peakId: "x", peakCode: "y" } })).rejects.toThrow(/UPSELL_PEAK_EVENT_TRANSITION/);
     await expect(prisma.upsellPeakEvent.delete({ where: { id: events[0].id } })).rejects.toThrow(/UPSELL_PEAK_EVENT_KEPT/);
+  });
+});
+
+describe("VAT registration on the tax profile (owner 20 Nov 2026: not registered)", () => {
+  it("an Admin records it with its source; an Operator cannot; not registered forbids VAT and tax invoices", async () => {
+    await sale(1); // seeds the profile
+    const t = await prisma.taxProfile.findUniqueOrThrow({ where: { code: "UPSELL-STD" } });
+    await prisma.taxProfile.update({ where: { id: t.id }, data: { vatRegistration: "UNKNOWN", vatRegistrationSource: null } }); // as an older install has it
+    expect(await code(setVatRegistration(prisma, operator, { code: "UPSELL-STD", vatRegistration: "NOT_REGISTERED", source: "owner (example)" }))).toBe("ADMIN_ONLY");
+    expect(await code(setVatRegistration(prisma, admin, { code: "UPSELL-STD", vatRegistration: "NOT_REGISTERED", source: "" }))).toBe("SOURCE");
+    expect(await code(setVatRegistration(prisma, admin, { code: "UPSELL-STD", vatRegistration: "NOT_REGISTERED", source: "Owner, 20 Nov (example)" }))).toBe("OK");
+    expect(await prisma.taxProfile.findUniqueOrThrow({ where: { id: t.id } })).toMatchObject({ vatRegistration: "NOT_REGISTERED", status: "DRAFT", vatRegistrationById: admin.userId });
+    expect(await prisma.auditLog.count({ where: { action: "upsell.tax_vat_registration_set", entityId: t.id } })).toBe(1);
+    await expect(prisma.taxProfile.update({ where: { id: t.id }, data: { vatMode: "INCLUSIVE", vatRateBp: 700 } })).rejects.toThrow(/TaxProfile_not_registered_check/);
+    await expect(prisma.taxProfile.update({ where: { id: t.id }, data: { peakDocumentKind: "TAX_INVOICE_RECEIPT" } })).rejects.toThrow(/check/);
   });
 });
 
@@ -190,7 +221,12 @@ describe("the Admin returns or confirms a submission", () => {
     expect(clearing.payload).toMatchObject({ totalSatang: 80000, lines: [expect.objectContaining({ amountSatang: 60000, bankRef: "KB-7731-0042" }), expect.objectContaining({ amountSatang: 20000 })] });
     // Confirmed money is verified in the registry: it keeps its share for good.
     expect((await prisma.bankTransactionUse.findMany({ where: { sourceTable: "CashSettlementTransfer" } })).every((u) => u.verified && u.live)).toBe(true);
-    expect(await code(confirmHandIn(prisma, admin, { settlementId, submissionNo: 1, transferIds: [a.id, b.id] }))).toBe("STALE");
+    // Pressed again: answered as confirmed, nothing written twice.
+    const events = await prisma.upsellPeakEvent.count();
+    expect(await confirmHandIn(prisma, admin, { settlementId, submissionNo: 1, transferIds: [a.id, b.id] })).toMatchObject({ status: "CONFIRMED" });
+    expect(await prisma.cashCustodyEntry.count({ where: { kind: "REMITTED" } })).toBe(1);
+    expect(await prisma.upsellPeakEvent.count()).toBe(events);
+    expect(await code(confirmHandIn(prisma, admin, { settlementId, submissionNo: 1, transferIds: [a.id] }))).toBe("STALE"); // not the same confirmation
     // Approval and fees are untouched: no guide payment, no job-sheet change.
     expect(await prisma.guidePayment.count()).toBe(0);
   });
@@ -232,21 +268,26 @@ describe("the Admin returns or confirms a submission", () => {
         code(confirmHandIn(prisma, admin, { settlementId, submissionNo: 1, transferIds: [a.id, b.id] })),
         code(confirmHandIn(other, admin, { settlementId, submissionNo: 1, transferIds: [a.id, b.id] })),
       ]);
-      expect(results.sort()).toEqual(["OK", "STALE"]);
-      expect(await prisma.cashCustodyEntry.count({ where: { kind: "REMITTED" } })).toBe(1);
+      expect(results).toEqual(["OK", "OK"]); // the second answers "confirmed" …
+      expect(await prisma.cashCustodyEntry.count({ where: { kind: "REMITTED" } })).toBe(1); // … and writes nothing
+      expect(await prisma.upsellPeakEvent.count({ where: { eventKind: "BANK_CLEARING" } })).toBe(1);
     } finally { await other.$disconnect(); }
   });
 
-  it("transfers to two account versions: confirmed, but the bank clearing waits for the accountant", async () => {
+  it("bank clearing: one event per actual transfer date and receiving account — an older account clears to itself", async () => {
     await ready();
-    const a = (await transfer(60000, "KB-7731-0042")).transfer;
+    const yesterday = new Date(Date.now() - 26 * 3600_000).toISOString();
+    const a = (await transfer(50000, "KB-7731-0042", guide, jobId, yesterday)).transfer;
+    const b = (await transfer(10000, "KB-7731-0043")).transfer;
     await account("1234");
-    const b = (await transfer(20000, "KB-7731-0057")).transfer;
-    const s = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [a.id, b.id] });
-    await confirmHandIn(prisma, admin, { settlementId: s.settlement.id, submissionNo: 1, transferIds: [a.id, b.id] });
-    const clearing = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "BANK_CLEARING" } });
-    expect(clearing.status).toBe("BLOCKED");
-    expect(clearing.blockedReasons.join(" ")).toMatch(/different receiving accounts/);
+    const c = (await transfer(20000, "KB-7731-0057")).transfer;
+    const s = await submitHandIn(prisma, guide, { jobSheetId: jobId, transferIds: [a.id, b.id, c.id] });
+    await confirmHandIn(prisma, admin, { settlementId: s.settlement.id, submissionNo: 1, transferIds: [a.id, b.id, c.id] });
+    const clearings = await prisma.upsellPeakEvent.findMany({ where: { eventKind: "BANK_CLEARING" }, include: { bankLinks: true }, orderBy: { eventDate: "asc" } });
+    const shape = clearings.map((e) => [e.eventDate, (e.payload as { receivingAccountKey: string }).receivingAccountKey, (e.payload as { totalSatang: number }).totalSatang, e.bankLinks.length]).sort();
+    expect(shape).toEqual([[a.transferDate, "ACC:999007890", 50000, 1], [TODAY, "ACC:999001234", 20000, 1], [TODAY, "ACC:999007890", 10000, 1]].sort());
+    for (const e of clearings) expect(e.blockedReasons.join(" ")).not.toMatch(/different receiving accounts/);
+    expect(new Set(clearings.flatMap((e) => e.bankLinks.map((l) => l.bankTransactionId))).size).toBe(3); // each transfer cleared once
   });
 });
 
@@ -265,9 +306,33 @@ describe("reversing a sale", () => {
     expect(await decideReversal(prisma, admin, { reversalId: r.id, approve: true, note: "same guest as the first sale (example)" })).toEqual({ approved: true, guideCashReduced: true });
     expect(await held()).toBe(60000);
     expect(await prisma.upsellSale.findUniqueOrThrow({ where: { saleNo: s.saleNo } })).toMatchObject({ status: "REVERSED" });
-    const ev = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "SALE_CANCELLED" } });
-    expect(ev.blockedReasons.join()).toMatch(/after the PEAK UAT/);
+    // Its receipt never reached PEAK: cancelled before it can be sent; no cancelling document needed.
+    const receipt = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "RECEIPT", payload: { path: ["reference"], equals: s.saleNo } } });
+    expect(receipt).toMatchObject({ status: "CANCELLED", cancelledReason: expect.stringMatching(/recorded in error/) });
+    expect(await prisma.upsellPeakEvent.count({ where: { eventKind: "SALE_CANCELLED" } })).toBe(0);
+    await expect(prisma.upsellPeakEvent.update({ where: { id: receipt.id }, data: { status: "PENDING", cancelledReason: null } })).rejects.toThrow(/UPSELL_PEAK_EVENT_KEPT/);
     expect(await code(decideReversal(prisma, admin, { reversalId: r.id, approve: true }))).toBe("DECIDED");
+  });
+
+  it("recorded in error after its receipt is in PEAK: a cancelling document is queued (blocked until UAT); while uncertain: refused", async () => {
+    await sale(3);
+    const s1 = await sale(1), s2 = await sale(1);
+    const sheet = await prisma.jobSheet.findUniqueOrThrow({ where: { id: jobId } });
+    const receiptOf = (no: string) => prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "RECEIPT", payload: { path: ["reference"], equals: no } } });
+    await postEvent((await receiptOf(s1.saleNo)).id);
+    const r1 = await requestErrorReversal(prisma, guide, { saleNo: s1.saleNo, affirmationText: errorAffirmationText(s1, sheet.ref), reason: "pressed twice (example)" });
+    await decideReversal(prisma, admin, { reversalId: r1.id, approve: true });
+    expect((await receiptOf(s1.saleNo)).status).toBe("POSTED");
+    const cancel = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "SALE_CANCELLED" } });
+    expect(cancel.blockedReasons.join()).toMatch(/after the PEAK UAT/);
+    // Receipt in flight: the reversal waits.
+    const e2 = await receiptOf(s2.saleNo);
+    await prisma.upsellPeakEvent.update({ where: { id: e2.id }, data: { status: "PENDING", blockedReasons: [] } });
+    await prisma.upsellPeakEvent.update({ where: { id: e2.id }, data: { status: "SENDING", leaseUntil: new Date(Date.now() + 60_000) } });
+    await prisma.upsellPeakEvent.update({ where: { id: e2.id }, data: { status: "UNCERTAIN", leaseUntil: null } });
+    const r2 = await requestErrorReversal(prisma, guide, { saleNo: s2.saleNo, affirmationText: errorAffirmationText(s2, sheet.ref), reason: "pressed twice (example)" });
+    expect(await code(decideReversal(prisma, admin, { reversalId: r2.id, approve: true }))).toBe("PEAK_UNCERTAIN");
+    expect(await held()).toBe(80000);
   });
 
   it("refunded by the company: the guide's cash is NOT reduced; refunded from the guide's cash: it is", async () => {
@@ -278,6 +343,9 @@ describe("reversing a sale", () => {
     expect(company.refundAmountSatang).toBe(20000); // the full sale, always
     expect(await decideReversal(prisma, admin, { reversalId: company.id, approve: true })).toEqual({ approved: true, guideCashReduced: false });
     expect(await held()).toBe(100000);
+    // The money was received: its receipt stays; the refund is its own document.
+    expect((await prisma.upsellPeakEvent.findFirstOrThrow({ where: { eventKind: "RECEIPT", payload: { path: ["reference"], equals: s1.saleNo } } })).status).toBe("BLOCKED");
+    expect(await prisma.upsellPeakEvent.count({ where: { eventKind: "SALE_REFUNDED" } })).toBe(1);
     const fromCash = await requestRefundReversal(prisma, admin, { saleNo: s2.saleNo, reason: "guest unwell (example)", paidBy: "GUIDE_CASH", evidence: { url: "https://example.test/refund-2" } });
     await decideReversal(prisma, admin, { reversalId: fromCash.id, approve: true });
     expect(await held()).toBe(80000);
@@ -313,7 +381,8 @@ describe("the PEAK sender (PR4-P plugs in the real adapter): never a blind resen
     await prisma.upsellPeakEvent.update({ where: { id: e.id }, data: { status: "PENDING", blockedReasons: [] } });
     return e.id;
   };
-  const adapter = (post: UpsellPeakAdapter["post"], readBack: UpsellPeakAdapter["readBack"] = async () => ({ found: false })): UpsellPeakAdapter => ({ post, readBack });
+  const adapter = (post: UpsellPeakAdapter["post"], readBack: UpsellPeakAdapter["readBack"] = async () => ({ found: false, reliable: true })): UpsellPeakAdapter => ({ post, readBack });
+  const later = (ms: number) => new Date(Date.now() + ms);
 
   it("is off unless switched on", async () => {
     const id = await pending();
@@ -333,12 +402,46 @@ describe("the PEAK sender (PR4-P plugs in the real adapter): never a blind resen
     await expect(prisma.upsellPeakEvent.update({ where: { id }, data: { peakCode: "other" } })).rejects.toThrow(/UPSELL_PEAK_EVENT_KEPT/);
   });
 
-  it("read back proves it absent → PENDING (safe to send); PEAK refuses → FAILED, retried only explicitly", async () => {
+  it("absence counts only when PEAK says so reliably, after the grace period; PEAK refuses → FAILED, retried only explicitly", async () => {
     vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
     const id = await pending();
     await sendPeakEvent(prisma, adapter(async () => ({ ok: false, outcome: "UNKNOWN", error: "socket hang up" })), id);
-    expect((await resolveUncertain(prisma, adapter(async () => ({ ok: true, peakId: "x", peakCode: "y" }), async () => ({ found: false })), id)).status).toBe("PENDING");
+    const ok = async () => ({ ok: true as const, peakId: "x", peakCode: "y" });
+    // Too soon, or not a reliable "absent": stays UNCERTAIN.
+    expect((await resolveUncertain(prisma, adapter(ok, async () => ({ found: false, reliable: true })), id)).status).toBe("UNCERTAIN");
+    expect((await resolveUncertain(prisma, adapter(ok, async () => ({ found: false, reliable: false })), id, later(ABSENCE_GRACE_MS + 1000))).status).toBe("UNCERTAIN");
+    expect((await resolveUncertain(prisma, adapter(ok, async () => ({ found: false, reliable: true })), id, later(ABSENCE_GRACE_MS + 1000))).status).toBe("PENDING");
     expect((await sendPeakEvent(prisma, adapter(async () => ({ ok: false, outcome: "REJECTED", error: "resCode 400 inside HTTP 200" })), id)).status).toBe("FAILED");
     await expect(sendPeakEvent(prisma, adapter(async () => ({ ok: true, peakId: "x", peakCode: "y" })), id)).rejects.toThrow(UpsellPeakRefused);
+  });
+
+  it("an adapter that throws leaves it UNCERTAIN; a sender that dies is found by its expired lease → UNCERTAIN", async () => {
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    const id = await pending();
+    expect((await sendPeakEvent(prisma, adapter(async () => { throw new Error("ECONNRESET"); }), id)).status).toBe("UNCERTAIN");
+    const id2 = (await prisma.upsellPeakEvent.findFirstOrThrow({ where: { id } })).id;
+    expect(id2).toBe(id);
+    // A sender that claimed and then died:
+    await sale(1);
+    const e = await prisma.upsellPeakEvent.findFirstOrThrow({ where: { status: "BLOCKED" } });
+    await prisma.upsellPeakEvent.update({ where: { id: e.id }, data: { status: "PENDING", blockedReasons: [] } });
+    await prisma.upsellPeakEvent.update({ where: { id: e.id }, data: { status: "SENDING", leaseUntil: new Date(Date.now() + 60_000) } });
+    expect(await recoverExpiredLeases(prisma)).toBe(0); // still within its lease
+    expect(await recoverExpiredLeases(prisma, later(120_000))).toBe(1);
+    expect(await prisma.upsellPeakEvent.findUniqueOrThrow({ where: { id: e.id } })).toMatchObject({ status: "UNCERTAIN", leaseUntil: null });
+    await expect(sendPeakEvent(prisma, adapter(async () => ({ ok: true, peakId: "x", peakCode: "y" })), e.id)).rejects.toThrow(UpsellPeakRefused);
+  });
+
+  it("a stale read-back cannot overwrite a POSTED event or open a second send", async () => {
+    vi.stubEnv("UPSELL_PEAK_AUTO_SYNC", "1");
+    const id = await pending();
+    await sendPeakEvent(prisma, adapter(async () => ({ ok: false, outcome: "UNKNOWN", error: "timeout" })), id);
+    // While this read-back is in flight, another resolver finds it in PEAK and posts it.
+    const racing = adapter(async () => ({ ok: true, peakId: "x", peakCode: "y" }), async () => {
+      await resolveUncertain(prisma, adapter(async () => ({ ok: true, peakId: "x", peakCode: "y" }), async () => ({ found: true, peakId: "peak-1", peakCode: "RE-1" })), id);
+      return { found: false, reliable: true };
+    });
+    await expect(resolveUncertain(prisma, racing, id, later(ABSENCE_GRACE_MS + 1000))).rejects.toThrow(UpsellPeakRefused);
+    expect(await prisma.upsellPeakEvent.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "POSTED", peakId: "peak-1", peakCode: "RE-1" });
   });
 });

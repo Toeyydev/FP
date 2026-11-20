@@ -5,8 +5,11 @@ import { REVENUE_CATEGORY_LABEL } from "./catalog";
 // What PEAK must receive for Tour Upsell, written as an event IN THE SAME TRANSACTION as the
 // business event it records (owner + Codex, 20 Nov 2026). Three distinct things, never merged:
 //
-//   RECEIPT              the guest paid (cash to the guide): a receipt, paid via guide-held cash
-//   REVENUE_RECOGNITION  the service was given, on its service date, to its revenue category
+//   RECEIPT              the guest paid (cash to the guide): a receipt, paid via guide-held cash. For a
+//                        service given the same day (a Route Extension) it carries the income itself;
+//                        for a service still to come it credits unearned revenue instead
+//   REVENUE_RECOGNITION  only for a service paid in advance: the income, on the actual service date,
+//                        once the service is given (approval is the trigger, not the date)
 //   BANK_CLEARING        the guide's transfers reached the company account (Admin confirmed):
 //                        one line per central bank transfer (BankTransaction), each cleared once
 //   SALE_CANCELLED / SALE_REFUNDED   a sale undone — void or credit note is chosen per document
@@ -17,6 +20,8 @@ import { REVENUE_CATEGORY_LABEL } from "./catalog";
 // reasons shown; nothing is guessed. Sending is PR4-P and stays off (UPSELL_PEAK_AUTO_SYNC).
 
 type Tx = Prisma.TransactionClient;
+
+export class UpsellPeakRefused extends Error {}
 type Db = PrismaClient | Tx;
 
 export type UpsellPeakEventKind = "RECEIPT" | "REVENUE_RECOGNITION" | "BANK_CLEARING" | "SALE_CANCELLED" | "SALE_REFUNDED";
@@ -34,9 +39,13 @@ export async function evaluateMapping(db: Db, needs: Needs): Promise<{ snapshot:
   const snapshot: Record<string, unknown> = {};
   if (needs.taxProfileId) {
     const t = await db.taxProfile.findUnique({ where: { id: needs.taxProfileId } });
-    snapshot.taxProfile = t ? { id: t.id, code: t.code, status: t.status, vatMode: t.vatMode, vatRateBp: t.vatRateBp, revenueRecognition: t.revenueRecognition, peakDocumentKind: t.peakDocumentKind } : null;
+    snapshot.taxProfile = t ? { id: t.id, code: t.code, status: t.status, vatRegistration: t.vatRegistration, vatRegistrationSource: t.vatRegistrationSource, vatMode: t.vatMode, vatRateBp: t.vatRateBp, revenueRecognition: t.revenueRecognition, peakDocumentKind: t.peakDocumentKind } : null;
     if (!t || t.status !== "CONFIRMED") reasons.push("The tax profile is not confirmed by the accountant");
-    else if (t.vatMode === "UNCONFIRMED") reasons.push("The VAT treatment is not confirmed");
+    if (t?.vatRegistration === "UNKNOWN") reasons.push("Whether the company is VAT-registered is not recorded");
+    // Not registered: no VAT and no tax invoice — the VAT mode question does not arise. Registered:
+    // the VAT treatment must be confirmed. Either way the PEAK document type is the UAT's answer.
+    if (t?.vatRegistration === "REGISTERED" && t.vatMode === "UNCONFIRMED") reasons.push("The VAT treatment is not confirmed");
+    if (t && !t.peakDocumentKind) reasons.push(t.vatRegistration === "NOT_REGISTERED" ? "The PEAK no-VAT document type is not confirmed (verified on UAT first)" : "The PEAK document type is not confirmed");
   }
   const categories = [needs.revenueCategory, needs.guideCashHeld ? GUIDE_CASH_HELD : null].filter((c): c is string => !!c);
   if (categories.length) {
@@ -76,6 +85,42 @@ export async function recordPeakEvent(tx: Tx, input: { kind: UpsellPeakEventKind
   return event;
 }
 
+/** Revenue received for a service not yet given (a PeakAccountMapping category). */
+export const UNEARNED_REVENUE = "UPSELL_UNEARNED_REVENUE";
+
+/**
+ * Where a sale's receipt credits: the revenue category when the service is given on or before
+ * the payment date (one document carries the income — never a second revenue posting), or
+ * unearned revenue when the service is still to come (recognised later, on its service date).
+ */
+export const receiptCredit = (paymentDate: string, serviceDate: string, revenueCategory: string) =>
+  serviceDate <= paymentDate ? { credit: revenueCategory, deferred: false } : { credit: UNEARNED_REVENUE, deferred: true };
+
+export async function recordSaleReceipt(tx: Tx, s: { saleId: string; saleNo: string; jobRef: string | null; productCode: string; version: number; guests: number; grossSatang: number; revenueCategory: string; taxProfileId: string; paymentDate: string; serviceDate: string }) {
+  const c = receiptCredit(s.paymentDate, s.serviceDate, s.revenueCategory);
+  return recordPeakEvent(tx, {
+    kind: "RECEIPT", sourceTable: "UpsellSale", sourceId: s.saleId, eventDate: s.paymentDate,
+    payload: { reference: s.saleNo, saleId: s.saleId, jobRef: s.jobRef, productCode: s.productCode, version: s.version, guests: s.guests, grossSatang: s.grossSatang,
+      paymentDate: s.paymentDate, serviceDate: s.serviceDate, paidVia: GUIDE_CASH_HELD, credit: c.credit, revenueCategory: s.revenueCategory, deferred: c.deferred },
+    needs: { taxProfileId: s.taxProfileId, revenueCategory: c.credit, guideCashHeld: true },
+  });
+}
+
+/**
+ * A service paid in advance, now given: the income on its actual service date, moved out of
+ * unearned revenue. Called by the step that confirms the service (its approval is the trigger,
+ * not the date). Refused for a sale whose receipt already carried the income.
+ */
+export async function recordRevenueRecognition(tx: Tx, s: { saleId: string; saleNo: string; grossSatang: number; revenueCategory: string; taxProfileId: string; serviceDate: string }) {
+  const receipt = await tx.upsellPeakEvent.findUnique({ where: { eventKind_sourceTable_sourceId: { eventKind: "RECEIPT", sourceTable: "UpsellSale", sourceId: s.saleId } } });
+  if (!receipt || !(receipt.payload as { deferred?: boolean }).deferred) throw new UpsellPeakRefused("This sale's receipt already carries the income — no separate revenue posting");
+  return recordPeakEvent(tx, {
+    kind: "REVENUE_RECOGNITION", sourceTable: "UpsellSale", sourceId: s.saleId, eventDate: s.serviceDate,
+    payload: { reference: s.saleNo, saleId: s.saleId, amountSatang: s.grossSatang, serviceDate: s.serviceDate, from: UNEARNED_REVENUE, to: s.revenueCategory },
+    needs: { taxProfileId: s.taxProfileId, revenueCategory: s.revenueCategory, blocked: [] },
+  });
+}
+
 // ── PR4-P: the interface the PEAK integration implements ───────────────────────────────────
 
 export type PeakPostResult =
@@ -83,7 +128,9 @@ export type PeakPostResult =
   | { ok: false; outcome: "REJECTED"; error: string } // PEAK answered and refused (inside HTTP 200 too)
   | { ok: false; outcome: "UNKNOWN"; error: string }; // timeout / transport: it may or may not exist
 
-export type PeakReadBack = { found: true; peakId: string; peakCode: string } | { found: false } | { unknown: true; error: string };
+/** found:false must say whether PEAK's answer proves absence (`reliable`) — a list that may lag
+ *  behind a recent write does not. */
+export type PeakReadBack = { found: true; peakId: string; peakCode: string } | { found: false; reliable: boolean } | { unknown: true; error: string };
 
 /** One implementation per event kind's PEAK document (receipt, daily journal, void / credit note). */
 export interface UpsellPeakAdapter {
@@ -92,30 +139,62 @@ export interface UpsellPeakAdapter {
   readBack(event: { id: string; eventKind: UpsellPeakEventKind; payload: unknown }): Promise<PeakReadBack>;
 }
 
-export class UpsellPeakRefused extends Error {}
+
+/** How long a sender may hold an event before it counts as lost (→ UNCERTAIN, read back). */
+export const SEND_LEASE_MS = 2 * 60_000;
+/** A "not there" from PEAK proves absence only this long after the last attempt (its own lag). */
+export const ABSENCE_GRACE_MS = 10 * 60_000;
 
 /**
- * Send one PENDING event through `adapter`. Claims it first (PENDING → SENDING, one sender);
- * a timeout leaves it UNCERTAIN — never sent again until a read-back settles it.
+ * Send one PENDING event through `adapter`. Claims it first (PENDING → SENDING with a lease, one
+ * sender); a timeout, a transport error or the adapter throwing leaves it UNCERTAIN — never sent
+ * again until a read-back settles it. A sender that dies mid-send is found by recoverExpiredLeases.
  */
-export async function sendPeakEvent(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string) {
+export async function sendPeakEvent(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string, now = new Date()) {
   if (!upsellPeakAutoSyncEnabled()) throw new UpsellPeakRefused("Sending upsell events to PEAK is off (UPSELL_PEAK_AUTO_SYNC)");
-  const claimed = await db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "PENDING" }, data: { status: "SENDING", attempts: { increment: 1 }, lastAttemptAt: new Date() } });
+  const claimed = await db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "PENDING" }, data: { status: "SENDING", attempts: { increment: 1 }, lastAttemptAt: now, leaseUntil: new Date(now.getTime() + SEND_LEASE_MS) } });
   if (claimed.count !== 1) throw new UpsellPeakRefused("Only a PENDING event is sent — a BLOCKED, UNCERTAIN or FAILED one is resolved first");
   const e = await db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
-  const r = await adapter.post({ id: e.id, eventKind: e.eventKind as UpsellPeakEventKind, eventDate: e.eventDate, payload: e.payload, mappingSnapshot: e.mappingSnapshot });
-  if (r.ok) return db.upsellPeakEvent.update({ where: { id: eventId }, data: { status: "POSTED", peakId: r.peakId, peakCode: r.peakCode, lastError: null } });
-  return db.upsellPeakEvent.update({ where: { id: eventId }, data: { status: r.outcome === "REJECTED" ? "FAILED" : "UNCERTAIN", lastError: r.error.slice(0, 500) } });
+  let r: PeakPostResult;
+  try {
+    r = await adapter.post({ id: e.id, eventKind: e.eventKind as UpsellPeakEventKind, eventDate: e.eventDate, payload: e.payload, mappingSnapshot: e.mappingSnapshot });
+  } catch (err) {
+    r = { ok: false, outcome: "UNKNOWN", error: `adapter failed: ${String((err as Error)?.message ?? err)}` };
+  }
+  // Only the claim this sender holds is settled (status SENDING at the version it set).
+  const settle = (data: Prisma.UpsellPeakEventUpdateManyMutationInput) => db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "SENDING", version: e.version }, data: { ...data, leaseUntil: null } });
+  const done = r.ok
+    ? await settle({ status: "POSTED", peakId: r.peakId, peakCode: r.peakCode, lastError: null })
+    : await settle({ status: r.outcome === "REJECTED" ? "FAILED" : "UNCERTAIN", lastError: r.error.slice(0, 500) });
+  if (done.count !== 1) throw new UpsellPeakRefused("This event was settled by someone else meanwhile — read it again");
+  return db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
 }
 
-/** Settle an UNCERTAIN event by asking PEAK: found → POSTED; proven absent → PENDING; unknown → stays. */
-export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string) {
+/** A SENDING event whose lease ran out (the sender died): UNCERTAIN — read back, never resent. */
+export async function recoverExpiredLeases(db: PrismaClient, now = new Date()) {
+  const r = await db.upsellPeakEvent.updateMany({ where: { status: "SENDING", leaseUntil: { lt: now } }, data: { status: "UNCERTAIN", leaseUntil: null, lastError: "The sender stopped before PEAK's answer was saved — read back before anything else" } });
+  return r.count;
+}
+
+/**
+ * Settle an UNCERTAIN event by asking PEAK. Found → POSTED with its id and code. Proven absent —
+ * an answer the adapter marks reliable, given after the grace period since the last attempt — →
+ * PENDING. Anything else: stays UNCERTAIN. Compare-and-set on the version read, so a stale answer
+ * can never overwrite a POSTED event or open a second send.
+ */
+export async function resolveUncertain(db: PrismaClient, adapter: UpsellPeakAdapter, eventId: string, now = new Date()) {
   const e = await db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
   if (e.status !== "UNCERTAIN") throw new UpsellPeakRefused("Only an UNCERTAIN event is read back");
   const r = await adapter.readBack({ id: e.id, eventKind: e.eventKind as UpsellPeakEventKind, payload: e.payload });
-  if ("unknown" in r) return db.upsellPeakEvent.update({ where: { id: eventId }, data: { lastError: r.error.slice(0, 500) } });
-  if (r.found) return db.upsellPeakEvent.update({ where: { id: eventId }, data: { status: "POSTED", peakId: r.peakId, peakCode: r.peakCode, lastError: null } });
-  return db.upsellPeakEvent.update({ where: { id: eventId }, data: { status: "PENDING", lastError: "Read back from PEAK: not there — safe to send again" } });
+  const cas = (data: Prisma.UpsellPeakEventUpdateManyMutationInput) => db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "UNCERTAIN", version: e.version }, data });
+  let done;
+  if ("unknown" in r) done = await cas({ lastError: r.error.slice(0, 500) });
+  else if (r.found) done = await cas({ status: "POSTED", peakId: r.peakId, peakCode: r.peakCode, lastError: null });
+  else if (!r.reliable) done = await cas({ lastError: "PEAK did not find it, but cannot promise it is absent — read back again later" });
+  else if (!e.lastAttemptAt || now.getTime() - e.lastAttemptAt.getTime() < ABSENCE_GRACE_MS) done = await cas({ lastError: "Not found yet — PEAK may still be writing it; read back again after the grace period" });
+  else done = await cas({ status: "PENDING", lastError: "Read back from PEAK: not there after the grace period — safe to send again" });
+  if (done.count !== 1) throw new UpsellPeakRefused("This event changed while PEAK was being asked — read it again");
+  return db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
 }
 
 /** Re-check a BLOCKED event against today's configuration (the payload never changes). */
@@ -123,5 +202,14 @@ export async function recheckBlocked(db: PrismaClient, eventId: string, needs: N
   const e = await db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
   if (e.status !== "BLOCKED") return e;
   const { snapshot, reasons } = await evaluateMapping(db, needs);
-  return db.upsellPeakEvent.update({ where: { id: eventId }, data: reasons.length ? { blockedReasons: reasons, mappingSnapshot: snapshot as Prisma.InputJsonValue } : { status: "PENDING", blockedReasons: [], mappingSnapshot: snapshot as Prisma.InputJsonValue } });
+  const done = await db.upsellPeakEvent.updateMany({ where: { id: eventId, status: "BLOCKED", version: e.version },
+    data: reasons.length ? { blockedReasons: reasons, mappingSnapshot: snapshot as Prisma.InputJsonValue } : { status: "PENDING", blockedReasons: [], mappingSnapshot: snapshot as Prisma.InputJsonValue } });
+  if (done.count !== 1) throw new UpsellPeakRefused("This event changed meanwhile — read it again");
+  return db.upsellPeakEvent.findUniqueOrThrow({ where: { id: eventId } });
+}
+
+/** Never send this event (the business event it records was undone before it reached PEAK). */
+export async function cancelPeakEvent(tx: Tx, eventId: string, reason: string) {
+  const done = await tx.upsellPeakEvent.updateMany({ where: { id: eventId, status: { in: ["BLOCKED", "PENDING", "FAILED"] } }, data: { status: "CANCELLED", cancelledReason: reason, blockedReasons: [] } });
+  return done.count === 1;
 }

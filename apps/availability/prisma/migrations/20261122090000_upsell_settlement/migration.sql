@@ -409,3 +409,58 @@ CREATE TRIGGER bank_tx_transfer_withdraw_guard BEFORE UPDATE ON "CashSettlementT
 
 CREATE TRIGGER bank_tx_cash_settlement_transfer AFTER INSERT OR UPDATE OF "bankRef", "amountSatang", "status", "confirmedAt", "receivingAccountKey" OR DELETE ON "CashSettlementTransfer"
   FOR EACH ROW EXECUTE FUNCTION bank_tx_source();
+
+-- ─── VAT registration (owner, 20 Nov 2026: "ยังไม่ได้จด VAT" — not VAT-registered) ───────────
+-- Whether the COMPANY is VAT-registered, with where the answer came from. Not registered means no
+-- VAT is charged and no tax invoice is issued — it says nothing about whether the service itself
+-- would be exempt. Recorded by an Admin (lib/upsell/tax-profile), never assumed.
+ALTER TABLE "TaxProfile" ADD COLUMN "vatRegistration" TEXT NOT NULL DEFAULT 'UNKNOWN',
+  ADD COLUMN "vatRegistrationSource" TEXT, ADD COLUMN "vatRegistrationById" TEXT, ADD COLUMN "vatRegistrationAt" TIMESTAMP(3);
+ALTER TABLE "TaxProfile"
+  ADD CONSTRAINT "TaxProfile_vat_registration_check" CHECK ("vatRegistration" IN ('UNKNOWN', 'NOT_REGISTERED', 'REGISTERED')),
+  ADD CONSTRAINT "TaxProfile_vat_registration_source_check" CHECK ("vatRegistration" = 'UNKNOWN' OR length(btrim(coalesce("vatRegistrationSource", ''))) >= 5),
+  -- Not registered: no VAT on the price and no tax invoice, whatever else is configured.
+  ADD CONSTRAINT "TaxProfile_not_registered_check" CHECK ("vatRegistration" <> 'NOT_REGISTERED' OR (
+      "vatMode" NOT IN ('INCLUSIVE', 'EXCLUSIVE') AND coalesce("peakDocumentKind", '') <> 'TAX_INVOICE_RECEIPT'));
+
+-- ─── Outbox: cancel before send, versions, send lease (Codex review of d246cae) ────────────
+-- CANCELLED: an event that must never be sent (a sale recorded in error, before its receipt
+-- reached PEAK); only from BLOCKED / PENDING / FAILED, never once it may be in PEAK.
+-- version: +1 on every change (the database's), so a decision taken on a stale read cannot win.
+-- leaseUntil: a sender's claim expires; an expired SENDING becomes UNCERTAIN (read back, no resend).
+ALTER TABLE "UpsellPeakEvent" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 0, ADD COLUMN "leaseUntil" TIMESTAMP(3), ADD COLUMN "cancelledReason" TEXT;
+ALTER TABLE "UpsellPeakEvent" DROP CONSTRAINT "UpsellPeakEvent_status_check";
+ALTER TABLE "UpsellPeakEvent"
+  ADD CONSTRAINT "UpsellPeakEvent_status_check" CHECK ("status" IN ('BLOCKED', 'PENDING', 'SENDING', 'POSTED', 'FAILED', 'UNCERTAIN', 'CANCELLED')),
+  ADD CONSTRAINT "UpsellPeakEvent_cancelled_check" CHECK (("status" = 'CANCELLED') = (length(btrim(coalesce("cancelledReason", ''))) >= 5)),
+  ADD CONSTRAINT "UpsellPeakEvent_lease_check" CHECK (("status" = 'SENDING') = ("leaseUntil" IS NOT NULL));
+ALTER TABLE "UpsellPeakEvent" DROP CONSTRAINT "UpsellPeakEvent_kind_check";
+ALTER TABLE "UpsellPeakEvent" ADD CONSTRAINT "UpsellPeakEvent_kind_check" CHECK ("eventKind" IN ('RECEIPT', 'REVENUE_RECOGNITION', 'BANK_CLEARING', 'SALE_CANCELLED', 'SALE_REFUNDED'));
+
+CREATE OR REPLACE FUNCTION upsell_peak_event_guard() RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'UPSELL_PEAK_EVENT_KEPT: a PEAK event is never deleted'; END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."status" NOT IN ('BLOCKED', 'PENDING') THEN RAISE EXCEPTION 'UPSELL_PEAK_EVENT_TRANSITION: an event starts BLOCKED or PENDING'; END IF;
+    NEW."version" := 0;
+    RETURN NEW;
+  END IF;
+  IF NEW."eventKind" <> OLD."eventKind" OR NEW."sourceTable" <> OLD."sourceTable" OR NEW."sourceId" <> OLD."sourceId"
+     OR NEW."eventDate" <> OLD."eventDate" OR NEW."payload" IS DISTINCT FROM OLD."payload" OR NEW."createdAt" <> OLD."createdAt"
+     OR (OLD."status" <> 'BLOCKED' AND NEW."mappingSnapshot" IS DISTINCT FROM OLD."mappingSnapshot") THEN
+    RAISE EXCEPTION 'UPSELL_PEAK_EVENT_KEPT: what an event sends is fixed when it happens';
+  END IF;
+  IF OLD."status" IN ('POSTED', 'CANCELLED') THEN
+    RAISE EXCEPTION 'UPSELL_PEAK_EVENT_KEPT: a % event is final', lower(OLD."status");
+  END IF;
+  IF NEW."status" IS DISTINCT FROM OLD."status" AND NOT (
+       (OLD."status" = 'BLOCKED' AND NEW."status" IN ('PENDING', 'CANCELLED'))
+    OR (OLD."status" = 'PENDING' AND NEW."status" IN ('SENDING', 'BLOCKED', 'CANCELLED'))
+    OR (OLD."status" = 'SENDING' AND NEW."status" IN ('POSTED', 'FAILED', 'UNCERTAIN'))
+    OR (OLD."status" = 'UNCERTAIN' AND NEW."status" IN ('POSTED', 'PENDING'))
+    OR (OLD."status" = 'FAILED' AND NEW."status" IN ('PENDING', 'CANCELLED'))) THEN
+    RAISE EXCEPTION 'UPSELL_PEAK_EVENT_TRANSITION: % → % is not a step a sender takes (never resend blindly)', OLD."status", NEW."status";
+  END IF;
+  NEW."version" := OLD."version" + 1;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;

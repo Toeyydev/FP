@@ -90,7 +90,9 @@ describe("Extras cash routes", () => {
     }
     as(adminId, "ADMIN");
     expect(await call(await CONFIRM(confirm, p("id", settlement.id)))).toMatchObject({ status: 200, body: { status: "CONFIRMED" } });
-    expect(await call(await CONFIRM(req({ submissionNo: 1, transferIds: [r.body.transferId] }), p("id", settlement.id)))).toMatchObject({ status: 409, body: { error: "STALE" } });
+    // Pressed again: answered as confirmed; still one remittance.
+    expect(await call(await CONFIRM(req({ submissionNo: 1, transferIds: [r.body.transferId] }), p("id", settlement.id)))).toMatchObject({ status: 200, body: { status: "CONFIRMED" } });
+    expect(await prisma.cashCustodyEntry.count({ where: { kind: "REMITTED" } })).toBe(1);
     as(g1, "GUIDE", "G-981");
     expect((await call(await VIEW(req(), p("jobSheetId", jobId)))).body).toMatchObject({ heldSatang: 0, status: "CONFIRMED", transfers: [expect.objectContaining({ status: "CONFIRMED", toAccount: "···7890" })] });
   });

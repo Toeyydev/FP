@@ -2180,31 +2180,36 @@ model UpsellProductVersion {
 // "unanswered" (UNCONFIRMED / null) is never read as zero. Once CONFIRMED it is frozen — a
 // changed answer is a new profile.
 model TaxProfile {
-  id                 String    @id @default(cuid())
-  code               String    @unique
-  name               String
+  id                    String    @id @default(cuid())
+  code                  String    @unique
+  name                  String
   // UNCONFIRMED | NONE (no VAT: exempt / outside VAT) | ZERO_RATED (VAT at 0%) |
   // INCLUSIVE | EXCLUSIVE (VAT at vatRateBp, which must then be > 0)
-  vatMode            String    @default("UNCONFIRMED")
-  vatRateBp          Int? // basis points; present exactly when INCLUSIVE / EXCLUSIVE
-  revenueRecognition String? // AT_PAYMENT | AT_SERVICE
-  breakageOnExpiry   Boolean? // recognise revenue on an unused, expired service?
-  peakDocumentKind   String? // JOURNAL | RECEIPT | TAX_INVOICE_RECEIPT
+  vatMode               String    @default("UNCONFIRMED")
+  vatRateBp             Int? // basis points; present exactly when INCLUSIVE / EXCLUSIVE
+  revenueRecognition    String? // AT_PAYMENT | AT_SERVICE
+  breakageOnExpiry      Boolean? // recognise revenue on an unused, expired service?
+  peakDocumentKind      String? // JOURNAL | RECEIPT | TAX_INVOICE_RECEIPT
   // Withholding tax, answered separately for the guide's incentive and for the fixed
   // (food) cost: UNCONFIRMED | NOT_WITHHELD | FIXED_RATE (the pct below, > 0) |
   // ENTERED_PER_PAYMENT (the operator enters the rate on each payment). Bearer: who carries
   // the withheld amount — PAYEE (deducted from the payment) | COMPANY (grossed up).
-  incentiveWhtMode   String    @default("UNCONFIRMED")
-  incentiveWhtPct    Decimal?  @db.Decimal(5, 2)
-  incentiveWhtBearer String?
-  fixedCostWhtMode   String    @default("UNCONFIRMED")
-  fixedCostWhtPct    Decimal?  @db.Decimal(5, 2)
-  fixedCostWhtBearer String?
-  status             String    @default("DRAFT") // DRAFT | CONFIRMED
-  confirmedById      String?
-  confirmedAt        DateTime?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  incentiveWhtMode      String    @default("UNCONFIRMED")
+  incentiveWhtPct       Decimal?  @db.Decimal(5, 2)
+  incentiveWhtBearer    String?
+  fixedCostWhtMode      String    @default("UNCONFIRMED")
+  fixedCostWhtPct       Decimal?  @db.Decimal(5, 2)
+  fixedCostWhtBearer    String?
+  status                String    @default("DRAFT") // DRAFT | CONFIRMED
+  // Is the COMPANY VAT-registered (owner 20 Nov 2026: not registered)? Not an exemption claim.
+  vatRegistration       String    @default("UNKNOWN") // UNKNOWN | NOT_REGISTERED | REGISTERED
+  vatRegistrationSource String? // where the answer came from
+  vatRegistrationById   String?
+  vatRegistrationAt     DateTime?
+  confirmedById         String?
+  confirmedAt           DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   productVersions UpsellProductVersion[]
 }
@@ -2557,6 +2562,9 @@ model UpsellPeakEvent {
   attempts        Int       @default(0)
   lastError       String?
   lastAttemptAt   DateTime?
+  version         Int       @default(0) // +1 on every change (database); compare-and-set
+  leaseUntil      DateTime? // a sender's claim while SENDING
+  cancelledReason String? // CANCELLED: why it is never sent
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @default(now()) @updatedAt
 

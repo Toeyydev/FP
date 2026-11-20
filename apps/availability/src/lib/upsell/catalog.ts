@@ -48,7 +48,12 @@ export const ONSITE_SOURCE_TOURS = ["T-001", "T-002"] as const;
 
 /** The draft tax profile every product starts on. The accountant confirms it (PR8); until then
  *  nothing is exported to PEAK. */
-export const DEFAULT_TAX_PROFILE = { code: "UPSELL-STD", name: "Upsell standard" } as const;
+// A new install records the owner's answer (20 Nov 2026) on the profile it creates. An existing
+// profile is never rewritten by the seed: an Admin records it (lib/upsell/tax-profile).
+export const DEFAULT_TAX_PROFILE = {
+  code: "UPSELL-STD", name: "Upsell standard",
+  vatRegistration: "NOT_REGISTERED", vatRegistrationSource: "Owner, 20 Nov 2026: the company is not VAT-registered (ยังไม่ได้จด VAT)",
+} as const;
 
 /** Which switch makes a product of this type live (lib/upsell/flags). */
 export const TYPE_SWITCH: Record<ProductType, "routeExtension" | "foodTour" | "onsiteTour"> = {
