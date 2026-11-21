@@ -20,7 +20,7 @@ import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
 import { rateDefaultFor, RATE_KIND_LABEL, type JobRates, type RateKind } from "@/lib/rate-payer";
-import { canonicalPaidBy, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown } from "@/lib/peak-sync";
+import { canonicalPaidBy, expenseDisposition, expenseMappingStatus, expenseRowsReady, figuresNeedRecheck, guidePayoutView, jobSheetTotals, tourCostBreakdown, type PeakAccountMap, type SyncDisposition } from "@/lib/peak-sync";
 import { contactSaveDecision, contactSaveHint, contactBoxOpen } from "@/lib/peak-contact-action";
 import { approvalView, JOB_SHEET_ROLE_NOTE_TH } from "@/lib/jobsheet-approval";
 import CertificateReference from "@/components/CertificateReference";
@@ -57,7 +57,7 @@ type JobMeta = { operator: string | null; ota: string | null; lead: string | nul
 type HistoryEvent = { at: string; label: string; by?: string | null };
 // PEAK readiness, computed server-side (lib/peak-sync). Read-only here: this screen
 // never posts to PEAK and never invents a document number.
-type PeakRow = null | { mappingStatus: "READY" | "NEEDS_REVIEW" | "UNMAPPED"; disposition: "SYNC" | "ALREADY_RECORDED" | "BLOCKED" };
+type PeakRow = null | { mappingStatus: "READY" | "NEEDS_REVIEW" | "UNMAPPED"; disposition: SyncDisposition };
 type PeakInfo = {
   peakSyncStatus: string | null; peakDocumentId: string | null; peakDocumentNo: string | null;
   syncedAt: string | null; syncError: string | null; lastPayloadHash: string | null;
@@ -65,6 +65,7 @@ type PeakInfo = {
   accountsConfigured: boolean; contactMapped: boolean; rowsReady: boolean;
   eligibility: { status: "NOT_READY" | "READY" | "SYNCING" | "SYNCED" | "FAILED" | "BLOCKED"; canSync: boolean; reasons: string[]; changedSinceSync: boolean };
   rows: PeakRow[];
+  accounts?: PeakAccountMap; // the category → account chart; absent from an older server
 } | null;
 
 // Google Calendar "add event" link — opens a pre-filled event the guide saves
@@ -380,7 +381,15 @@ export default function JobSheetEditor() {
   const money = jobSheetTotals(sheet.expenses, sheet.guideFee, sheet.ref, sheet.bookings);
   // Which figures are not yet safe to pay from, and why. Marked AT the number as
   // well as listed, so nobody reads a total without seeing that it is provisional.
-  const recheck = figuresNeedRecheck(sheet.expenses, money, {}, peak?.rows?.map((r) => r?.mappingStatus),
+  // Each row's account status, from the rows ON SCREEN (owner, 21 Nov 2026): the server's
+  // per-row verdict describes the saved sheet by index, so after adding, removing or
+  // recategorising a line it went stale and landed on the wrong row ("No account" on a
+  // mapped Ferry). Same pure rule and the same chart the server uses (lib/peak-sync).
+  const peakRows: PeakRow[] | undefined = peak?.accounts
+    ? sheet.expenses.map((e) => (isReviewExpense(e) ? null : { mappingStatus: expenseMappingStatus(e, peak.accounts), disposition: expenseDisposition(e, peak.accounts) }))
+    : peak?.rows;
+  const peakRowsReady = peak?.accounts ? expenseRowsReady(sheet.expenses, peak.accounts) : !!peak?.rowsReady;
+  const recheck = figuresNeedRecheck(sheet.expenses, money, {}, peakRows?.map((r) => r?.mappingStatus),
     // Operators only: the guide's own view shows what the guide reported, not who is held to account for a payer.
     canEdit && advanceLoaded ? { advances: liveJobAdvances(advance.advances) } : {});
   const flagged = (f: "totalTourExpenses" | "reimbursementDue" | "netPayToGuide") => recheck.some((r) => r.field === f);
@@ -1562,7 +1571,7 @@ export default function JobSheetEditor() {
             {sheet.expenses.map((e, i) => ({ e, i })).filter(({ e }) => !isReviewExpense(e)).map(({ e, i }, n) => {
               // Server-computed status for this row when available (it knows which
               // PEAK accounts are configured); the local rule is the fallback.
-              const pr = peak?.rows?.[i];
+              const pr = peakRows?.[i];
               const acct = pr?.mappingStatus ?? (expenseAccountingStatus(e) === "READY" ? "READY" : "NEEDS_REVIEW");
               const already = pr?.disposition === "ALREADY_RECORDED" || !!e.alreadyRecordedInPeak;
               const paid = canonicalPaidBy(e);
@@ -1825,7 +1834,7 @@ export default function JobSheetEditor() {
                 {/* Reflects the expense ROWS only. A missing guide contact blocks the
                     sheet but says nothing about this table — flagging it here would
                     send the operator hunting through rows that are all correct. */}
-                {peak?.rowsReady
+                {peakRowsReady
                   ? <span className="js-acct ok" title={`Every expense line has an accepted account (${PEAK_SERVICE_COST_LABEL})`}>Ready to sync</span>
                   : <span className="js-acct warn" title="One or more lines have no accepted accounting category yet">Needs review</span>}
               </td>

@@ -498,6 +498,15 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-review-no-tax
 
+      # A job sheet's Account Status follows the rows on screen while they are edited (from
+      # 2026-11-21): an unsaved delete or category change never shows another row's status.
+      - name: Job sheet account status follows unsaved edits, in a real browser
+        run: node scripts/e2e/jobsheet-live-account-status.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/jobsheet-live-account-status
+
       # The Job process board: the TO-BE path in two lanes with the jobs standing on each
       # step, the list with the next thing to do, and the same stage on the job sheet.
       - name: Job process board in a real browser
