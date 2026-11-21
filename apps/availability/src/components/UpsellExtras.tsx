@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import UpsellHandIn from "@/components/UpsellHandIn";
 import WalkInGuestQr from "@/components/WalkInGuestQr";
+import { handInLabel } from "@/components/upsell/hand-in-status";
 import { EXTRA, InlineExtra, baht, readPending, useUpsellJob, type Product, type Receipt } from "@/components/upsell/UpsellJob";
 
 // The Extras block on the guide's own job sheet, under "Your customers" (owner, 20 Nov 2026:
@@ -26,9 +27,6 @@ const peakLine = (r: Receipt) => r.state === "SYNCED" ? `PEAK: synced · ${r.pea
   : r.state === "CHECKING" ? "PEAK: being checked"
   : r.state === "WAITING" ? "PEAK: waiting for set-up"
   : "";
-const STATUS: Record<string, string> = {
-  NOT_SENT: "Not handed in yet", DRAFT: "Not handed in yet", SUBMITTED: "Slip sent — Admin is checking", RETURNED: "Returned — send again", CONFIRMED: "Confirmed", REVERSED: "Reversed",
-};
 const btn = (primary: boolean) => ({
   minHeight: 48, width: "100%", borderRadius: 10, border: `1px solid ${C.brand}`, background: primary ? C.brand : "#fff",
   color: primary ? "#fff" : C.brand, font: "inherit", fontSize: 15, fontWeight: 700, cursor: "pointer",
@@ -186,7 +184,7 @@ export default function UpsellExtras() {
       <dl className="ups-cash" style={{ margin: 0, background: C.warnBg, border: `1px solid ${C.warnLine}`, borderRadius: 10, padding: 12, display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.3fr)", gap: "6px 12px", fontSize: 13.5, color: C.warnInk, fontVariantNumeric: "tabular-nums" }}>
         <dt>Cash held <small>เงินสดที่ถืออยู่</small></dt><dd className="ups-held" style={{ margin: 0, textAlign: "right", fontWeight: 800 }}>{baht(x.cash.heldSatang)}</dd>
         <dt style={{ fontWeight: 800 }}>To hand in <small style={{ fontWeight: 500, fontSize: 12 }}>ยอดที่ต้องนำส่ง</small></dt><dd className="ups-remit" style={{ margin: 0, textAlign: "right", fontWeight: 800, fontSize: 16 }}>{baht(x.cash.toRemitSatang)}</dd>
-        <dt>Hand-in</dt><dd className="ups-status" style={{ margin: 0, textAlign: "right", fontWeight: 700 }}>{STATUS[x.cash.status] ?? x.cash.status}</dd>
+        <dt>Hand-in</dt><dd className="ups-status" style={{ margin: 0, textAlign: "right", fontWeight: 700 }}>{handInLabel(x.cash.status).th}</dd>
         <dt>Guide payout</dt><dd style={{ margin: 0, textAlign: "right" }}>Unchanged</dd>
       </dl>
       {x.closed?.code !== "REPORT_SENT" && x.cash.toRemitSatang > 0 && <small className="ups-next" style={{ color: C.soft }}>Next: send the end-tour report, then transfer with the ref above and upload the slip here.</small>}

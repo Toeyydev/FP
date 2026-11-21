@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import UpsellExtras from "./UpsellExtras";
 import { InlineExtra, UpsellJobProvider } from "./upsell/UpsellJob";
+import UpsellJobStaff from "./upsell/UpsellJobStaff";
 import JobProcessStrip from "@/components/JobProcessStrip";
 import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
@@ -2609,6 +2610,10 @@ export default function JobSheetEditor() {
               </div>
             </div>
           )}
+
+          {/* Extras cash the guide collected for the company — its own block, never part of the
+              guide's pay above. Read only; nothing is drawn while Extras is off. */}
+          <UpsellJobStaff guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>

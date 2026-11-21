@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { TransferRef } from "@/components/UpsellExtras";
+import { handInDates, handInLabel, type HandInTone } from "@/components/upsell/hand-in-status";
 
 // The guide hands in the Extras cash of one job — slips only (owner, 20 Nov 2026: "ให้อัพโหลดสลิป
 // อย่างเดียวก็พอแล้ว"): transfer the amount owed to the account shown with ref.โอนเงิน — the Job Ref,
@@ -12,11 +13,14 @@ import { TransferRef } from "@/components/UpsellExtras";
 // never transfer again. Transfers reported the earlier way stay readable. Everything shown comes
 // from the server (lib/upsell/settlement).
 
-type Transfer = { id: string; seq: number; amountSatang: number; transferredAt: string; transferDate: string; bankRef: string; hasSlip: boolean; toAccount: string; status: string; withdrawnReason: string | null };
-type Slip = { id: string; seq: number; status: string; uploadedAt: string; url: string | null; removedReason: string | null; toAccount: string; confirmed: boolean };
-type View = {
+export type Transfer = { id: string; seq: number; amountSatang: number; transferredAt: string; transferDate: string; bankRef: string; hasSlip: boolean; toAccount: string; status: string; withdrawnReason: string | null };
+export type Slip = { id: string; seq: number; status: string; uploadedAt: string; url: string | null; removedReason: string | null; toAccount: string; confirmed: boolean };
+export type View = {
   heldSatang: number; toRemitSatang: number; status: string; settlementNo: string | null; submissionNo: number; returnedReason: string | null;
-  memo: string | null; jobRef: string | null; coverage: { saleNo: string; productName: string; guests: number; grossSatang: number; heldSatang: number; status: string; reversal: string | null }[];
+  memo: string | null; jobRef: string | null;
+  /** Every sale on this job whose cash this guide took — kept after the hand-in, for the record. */
+  sales?: { saleNo: string; productName: string; guests: number; grossSatang: number; heldSatang: number; status: string; reversal: string | null }[];
+  coverage: { saleNo: string; productName: string; guests: number; grossSatang: number; heldSatang: number; status: string; reversal: string | null }[];
   receivingAccount: { id: string; version: number; label: string; display: string } | null;
   transfers: Transfer[];
   slips: Slip[];
@@ -35,6 +39,41 @@ async function call(url: string, init?: RequestInit) {
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((d.reasons ?? [d.error ?? `HTTP ${r.status}`]).join(" "));
   return d;
+}
+
+const TONE: Record<HandInTone, { bg: string; line: string; ink: string }> = {
+  wait: { bg: C.warnBg, line: C.warnLine, ink: C.warnInk }, check: { bg: C.warnBg, line: C.warnLine, ink: C.warnInk },
+  bad: { bg: C.badBg, line: C.badLine, ink: C.badInk }, ok: { bg: C.okBg, line: C.okLine, ink: C.okInk }, off: { bg: "#F4F4F5", line: C.line, ink: C.soft },
+};
+const LEGACY_CLASS: Record<string, string> = { SUBMITTED: "ups-sent", CONFIRMED: "ups-confirmed", RETURNED: "ups-returned" };
+const day = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { timeZone: "Asia/Bangkok", day: "numeric", month: "short" });
+
+/** Where this job's Extras cash is: รอไกด์โอน → ส่งสลิปแล้ว → บริษัทได้รับเงินแล้ว, with the dates and the slips.
+ *  The same card on the guide's Job Sheet and on the staff view of it. */
+export function HandInStatusCard({ v, staff = false }: { v: View; staff?: boolean }) {
+  const l = handInLabel(v.status), t = TONE[l.tone];
+  const { sentAt, receivedAt } = handInDates(v.history);
+  const confirmedTransfers = v.transfers.filter((x) => x.status === "CONFIRMED");
+  const slips = v.slips.filter((x) => x.status === "ACTIVE");
+  return (
+    <div role={l.tone === "bad" ? "alert" : "status"} className={`ups-status-card ${LEGACY_CLASS[v.status] ?? ""}`} data-status={v.status}
+      style={{ background: t.bg, border: `1px solid ${t.line}`, borderRadius: 10, padding: "10px 12px", color: t.ink, fontSize: 13.5, lineHeight: 1.55, overflowWrap: "anywhere" }}>
+      <b className="ups-status-th">{l.th}</b> · {l.en}
+      {v.settlementNo && <> · <span className="ups-status-handin">{v.settlementNo}</span></>}
+      {v.status === "RETURNED" && (staff
+        ? <><br />Returned to the guide: “{v.returnedReason}”.</>
+        : <><br />Admin: “{v.returnedReason}”. Your slips stay — <b>do not transfer again</b>. Add a missing slip or take out a wrong one, then send again.</>)}
+      {(v.status === "NOT_SENT" || v.status === "DRAFT" || v.status === "SUBMITTED") && v.heldSatang > 0 && <><br />Still with the guide: {baht(v.heldSatang)} — until the company confirms it against the bank.</>}
+      {(sentAt || receivedAt || confirmedTransfers.length > 0 || slips.length > 0) && (
+        <dl className="ups-status-dates" style={{ margin: "6px 0 0", display: "grid", gridTemplateColumns: "auto minmax(0,1fr)", gap: "2px 10px" }}>
+          {confirmedTransfers.length > 0 && <><dt>Transferred</dt><dd style={{ margin: 0 }}>{confirmedTransfers.map((x) => `${day(`${x.transferDate}T00:00:00+07:00`)} · ${baht(x.amountSatang)}`).join(" · ")}</dd></>}
+          {sentAt && <><dt>Slips sent</dt><dd style={{ margin: 0 }}>{sent(sentAt)}</dd></>}
+          {receivedAt && <><dt>Received</dt><dd className="ups-status-received" style={{ margin: 0 }}>{sent(receivedAt)}</dd></>}
+          {slips.length > 0 && <><dt>Slips</dt><dd style={{ margin: 0 }}>{slips.map((x, i) => <Fragment key={x.id}>{i > 0 ? " · " : ""}{x.url ? <a href={x.url} target="_blank" rel="noreferrer">Slip {x.seq}</a> : `Slip ${x.seq}`}</Fragment>)}</dd></>}
+        </dl>
+      )}
+    </div>
+  );
 }
 
 export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
@@ -103,16 +142,10 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
   return (
     <section className="js-handin" aria-labelledby="handin-h" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <h4 id="handin-h" style={{ margin: 0, fontSize: 15 }}>Hand in the Extras cash <small style={{ fontWeight: 500, color: C.soft }}>นำส่งเงินขายเพิ่ม</small></h4>
-      {v.status === "RETURNED" && (
-        <div role="alert" className="ups-returned" style={{ background: C.badBg, border: `1px solid ${C.badLine}`, borderRadius: 10, padding: "10px 12px", color: C.badInk }}>
-          <b>Returned for checking · {v.settlementNo} · submission {v.submissionNo}</b><br />
-          <span style={{ fontSize: 13 }}>Admin: “{v.returnedReason}”. Your slips stay here — <b>do not transfer again</b>. Add a missing slip or take out a wrong one, then send again.</span>
-        </div>
-      )}
-      {v.status === "SUBMITTED" && <div role="status" className="ups-sent" style={{ background: C.warnBg, border: `1px solid ${C.warnLine}`, borderRadius: 10, padding: "10px 12px", color: C.warnInk, fontSize: 13.5 }}><b>ส่งแล้ว รอตรวจสอบ</b> · Sent — Admin is checking · {v.settlementNo}<br />Cash held stays {baht(v.heldSatang)} until Admin confirms it against the bank.</div>}
-      {v.status === "CONFIRMED" && <div role="status" className="ups-confirmed" style={{ background: C.okBg, border: `1px solid ${C.okLine}`, borderRadius: 10, padding: "10px 12px", color: C.okInk, fontSize: 13.5 }}><b>✓ Confirmed</b> · {v.settlementNo}. Locked — a correction after confirmation is made by Admin (later).</div>}
+      <HandInStatusCard v={v} />
 
-      <div className="ups-code" style={{ border: `1px solid ${C.brand}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* What to transfer, and where — gone once the company has the money (the card above says so). */}
+      {v.status !== "CONFIRMED" && <div className="ups-code" style={{ border: `1px solid ${C.brand}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
         <TransferRef jobRef={v.jobRef} />
         <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: "4px 12px", fontSize: 13.5, fontVariantNumeric: "tabular-nums" }}>
           {v.coverage.map((c) => <Fragment key={c.saleNo}><dt style={{ color: C.soft, overflowWrap: "anywhere" }}>{c.saleNo} · {c.productName}{c.reversal === "REFUNDED_BY_COMPANY" ? ` · refunded by the company (sale ${baht(c.grossSatang)}) — the cash is still yours to hand in` : ""}</dt><dd style={{ margin: 0, textAlign: "right" }}>{baht(c.heldSatang)}</dd></Fragment>)}
@@ -120,7 +153,7 @@ export default function UpsellHandIn({ jobSheetId }: { jobSheetId: string }) {
           {v.receivingAccount && <><dt style={{ color: C.soft }}>Transfer to</dt><dd className="ups-account" style={{ margin: 0, textAlign: "right", overflowWrap: "anywhere" }}>{v.receivingAccount.label} · {v.receivingAccount.display}</dd></>}
         </dl>
         {v.memo && <small className="ups-memo" style={{ color: C.soft }}>Hand-in no. {v.memo} · internal</small>}
-      </div>
+      </div>}
       {editable && !v.receivingAccount && (
         <div className="ups-no-account" style={{ background: C.warnBg, border: `1px solid ${C.warnLine}`, borderRadius: 10, padding: "10px 12px", color: C.warnInk, fontSize: 13.5 }}>
           <b>Receiving account not set yet</b><br />An Admin has not chosen the account for Extras cash. Keep the cash; hand in once it is set. <b>Contact Admin.</b>

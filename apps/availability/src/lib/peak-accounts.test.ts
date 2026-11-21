@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ACCOUNTING_CATEGORIES, FIXED_CATEGORIES, accountChartReady, categoryStatus,
-  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, isPerJobCategory, isExtrasCategory,
+  missingRequired, isMapped, categoryForExpenseType, accountForExpenseType, isPerJobCategory, isExtrasCategory, extrasMappingProblems,
   type AccountMapping,
 } from "@/lib/peak-accounts";
 
@@ -113,5 +113,28 @@ describe("job-sheet category bridge", () => {
     expect(new Set(shared.map((m) => m.peakAccountCode)).size).toBe(1);
     expect(new Set(shared.map((m) => m.folkopsCategory)).size).toBe(5);
     expect(accountChartReady(shared)).toBe(true);
+  });
+});
+
+describe("Extras: cash held by guides stays apart from revenue", () => {
+  const row = (k: string, c: string | null) => ({ folkopsCategory: k, peakAccountCode: c });
+  it("accepts a receivable for the cash and a revenue account for the sale", () => {
+    expect(extrasMappingProblems([row("UPSELL_GUIDE_CASH_HELD", "113301"), row("UPSELL_ROUTE_REVENUE", "410202")])).toEqual([]);
+  });
+  it("accepts nothing mapped yet, or one side only", () => {
+    expect(extrasMappingProblems([])).toEqual([]);
+    expect(extrasMappingProblems([row("UPSELL_ROUTE_REVENUE", "410202"), row("UPSELL_GUIDE_CASH_HELD", null)])).toEqual([]);
+  });
+  it("refuses cash held on a revenue (or any non-asset) account", () => {
+    expect(extrasMappingProblems([row("UPSELL_GUIDE_CASH_HELD", "410202")]).join()).toMatch(/asset account/);
+    expect(extrasMappingProblems([row("UPSELL_GUIDE_CASH_HELD", "212103")]).join()).toMatch(/asset account/);
+  });
+  it("refuses Extras revenue on a non-revenue account, and on the cash-held account itself", () => {
+    expect(extrasMappingProblems([row("UPSELL_ROUTE_REVENUE", "113301")]).join()).toMatch(/revenue account/);
+    const same = extrasMappingProblems([row("UPSELL_GUIDE_CASH_HELD", "113301"), row("TOUR_SERVICE_REVENUE", "113301")]);
+    expect(same.join()).toMatch(/same account as cash held/);
+  });
+  it("leaves the tour-expense categories alone", () => {
+    expect(extrasMappingProblems([row("ENTRANCE_TICKET", "510116"), row("GUIDE_FEE", "510111")])).toEqual([]);
   });
 });

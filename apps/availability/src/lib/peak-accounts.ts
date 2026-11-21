@@ -95,6 +95,27 @@ export const isAccountingCategory = (v: string): v is AccountingCategory =>
 export const isExtrasCategory = (key: string): boolean =>
   ACCOUNTING_CATEGORIES.find((c) => c.key === key)?.scope === "EXTRAS";
 
+// Extras: the account that tracks cash a guide collected for the company and has not yet handed
+// in is a receivable (an asset, 1xxxxx), never revenue; Extras revenue is a revenue account
+// (4xxxxx). Owner, 21 Nov 2026: other receivables for the cash, Upsell revenue for the sale —
+// kept apart, so a hand-in can never book revenue a second time. Refused on save, no override.
+export const EXTRAS_REVENUE_CATEGORIES = ["UPSELL_ROUTE_REVENUE", "FOOD_TOUR_REVENUE", "TOUR_SERVICE_REVENUE"] as const;
+export const EXTRAS_CASH_HELD_CATEGORY = "UPSELL_GUIDE_CASH_HELD";
+
+/** Why this mapping state breaks the Extras rule (empty = fine). Pure; checks the state as a whole. */
+export function extrasMappingProblems(rows: { folkopsCategory: string; peakAccountCode: string | null }[]): string[] {
+  const code = (k: string) => (rows.find((r) => r.folkopsCategory === k)?.peakAccountCode ?? "").trim() || null;
+  const out: string[] = [];
+  const held = code(EXTRAS_CASH_HELD_CATEGORY);
+  if (held && !held.startsWith("1")) out.push(`Cash held by guides must be an asset account (1xxxxx) — ${held} is not`);
+  for (const k of EXTRAS_REVENUE_CATEGORIES) {
+    const c = code(k);
+    if (c && !c.startsWith("4")) out.push(`${k} must be a revenue account (4xxxxx) — ${c} is not`);
+    if (c && held && c === held) out.push(`${k} cannot use the same account as cash held by guides (${c})`);
+  }
+  return out;
+}
+
 export type AccountMapping = {
   folkopsCategory: string;
   peakAccountCode: string | null;

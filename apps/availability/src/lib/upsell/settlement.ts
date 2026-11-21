@@ -83,18 +83,21 @@ const covered = <T extends { heldSatang: number }>(c: T[]) => c.filter((x) => x.
 export const bankMemo = (settlementNo: string) => settlementNo;
 
 export async function handInView(db: Db, guideId: string, jobSheetId: string) {
-  const [held, settlement, account, coverage, job] = await Promise.all([
+  const [held, settlement, account, sales, job] = await Promise.all([
     heldOn(db, guideId, jobSheetId),
     db.cashSettlement.findUnique({ where: { guideId_sourceJobSheetId: { guideId, sourceJobSheetId: jobSheetId } }, include: { transfers: { orderBy: { seq: "asc" } }, submissions: { orderBy: { submissionNo: "asc" } }, returns: { orderBy: { submissionNo: "asc" } }, slips: { orderBy: { seq: "asc" }, include: { evidence: { select: { driveLink: true } } } } } }),
     currentReceivingAccount(db),
-    coverageOf(db, guideId, jobSheetId).then(covered),
+    coverageOf(db, guideId, jobSheetId),
     db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { ref: true } }),
   ]);
+  const coverage = covered(sales);
   // Read only: a GET never makes a hand-in code — prepareHandIn does, once.
   return {
     heldSatang: held, toRemitSatang: held,
     status: settlement?.status ?? "NOT_SENT", settlementNo: settlement?.settlementNo ?? null, submissionNo: settlement?.submissionNo ?? 0,
     memo: settlement ? bankMemo(settlement.settlementNo) : null, jobRef: job?.ref ?? null, coverage,
+    // Every sale on the job whose cash this guide took, handed in or not — the record staff read.
+    sales,
     returnedReason: settlement?.returnedReason ?? null,
     receivingAccount: account ? { id: account.id, version: account.version, label: account.label, display: account.accountDisplay } : null,
     transfers: (settlement?.transfers ?? []).map((t) => ({ id: t.id, seq: t.seq, amountSatang: t.amountSatang, transferredAt: t.transferredAt.toISOString(), transferDate: t.transferDate, bankRef: t.bankRef, hasSlip: !!(t.slipUrl || t.evidenceId), toAccount: t.receivingAccountDisplay, status: t.status, withdrawnReason: t.withdrawnReason })),

@@ -9,7 +9,9 @@ import {
   ACCOUNTING_CATEGORIES,
   accountChartReady,
   categoryStatus,
+  extrasMappingProblems,
   isAccountingCategory,
+  isExtrasCategory,
   missingRequired,
   type AccountingCategory,
 } from "@/lib/peak-accounts";
@@ -84,6 +86,16 @@ export async function POST(req: NextRequest) {
   const before = await loadMappings();
   const beforeByKey = new Map(before.map((r) => [r.folkopsCategory, r]));
   const changed: { category: string; from: string | null; to: string | null }[] = [];
+
+  // The Extras rule, on the state this save would leave (saved rows overlaid with this request) —
+  // and only when the request touches an Extras category, so a tour-expense save is never held up.
+  if (parsed.data.mappings.some((m) => isExtrasCategory(m.folkopsCategory))) {
+    const incoming = new Map(parsed.data.mappings.map((m) => [m.folkopsCategory, (m.peakAccountCode ?? "").trim() || null]));
+    const keys = new Set([...before.map((r) => r.folkopsCategory), ...incoming.keys()]);
+    const next = [...keys].map((k) => ({ folkopsCategory: k, peakAccountCode: incoming.has(k) ? incoming.get(k)! : (beforeByKey.get(k)?.isActive === false ? null : beforeByKey.get(k)?.peakAccountCode ?? null) }));
+    const problems = extrasMappingProblems(next);
+    if (problems.length) return NextResponse.json({ error: "extras-account-rule", detail: problems.join(" · ") }, { status: 400 });
+  }
 
   for (const m of parsed.data.mappings) {
     const key = m.folkopsCategory as AccountingCategory;
