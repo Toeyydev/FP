@@ -475,21 +475,36 @@ export type CashSaleRow = {
   saleNo: string; guideId: string; jobRef: string | null; jobDate: string; productName: string; kind: "ROUTE_EXTENSION" | "WALK_IN";
   guests: number; grossSatang: number; status: string; recordedAt: string;
   bookings: { bookingRef: string; guests: number; status: string }[];
+  /** The job's Hand-in Ref (FOLK-CSH-…), once the guide has one. */
+  handInNo: string | null;
   /** The job's hand-in: NOT_SENT until the guide uploads a slip and sends. */
   handIn: string;
 };
 
 /** Every cash sale a guide recorded, newest first — what "Send to Admin" puts in front of Admin. Read only. */
-export async function listCashSales(db: Db, take = 100): Promise<CashSaleRow[]> {
-  const sales = await db.upsellSale.findMany({ orderBy: { createdAt: "desc" }, take,
+/** Look a sale up by its Sale Ref, its Job Ref or its job's Hand-in Ref (part of one is enough). */
+async function cashSaleSearch(db: Db, q: string): Promise<Prisma.UpsellSaleWhereInput> {
+  const term = q.trim().slice(0, 60);
+  if (!term) return {};
+  const handIns = await db.cashSettlement.findMany({ where: { settlementNo: { contains: term, mode: "insensitive" } }, select: { guideId: true, sourceJobSheetId: true }, take: 50 });
+  return { OR: [
+    { saleNo: { contains: term, mode: "insensitive" } },
+    { sourceJobSheet: { ref: { contains: term, mode: "insensitive" } } },
+    ...handIns.map((h) => ({ sellingGuideId: h.guideId, sourceJobSheetId: h.sourceJobSheetId })),
+  ] };
+}
+
+export async function listCashSales(db: Db, take = 100, q = ""): Promise<CashSaleRow[]> {
+  const sales = await db.upsellSale.findMany({ where: await cashSaleSearch(db, q), orderBy: { createdAt: "desc" }, take,
     include: { sourceJobSheet: { select: { ref: true, date: true } }, allocations: { orderBy: { createdAt: "asc" }, select: { bookingRef: true, guests: true, status: true } } } });
   const keys = [...new Set(sales.map((s) => `${s.sellingGuideId}|${s.sourceJobSheetId}`))];
-  const settlements = keys.length ? await db.cashSettlement.findMany({ where: { OR: keys.map((k) => { const [guideId, sourceJobSheetId] = k.split("|"); return { guideId, sourceJobSheetId }; }) }, select: { guideId: true, sourceJobSheetId: true, status: true } }) : [];
-  const handIn = new Map(settlements.map((s) => [`${s.guideId}|${s.sourceJobSheetId}`, s.status]));
+  const settlements = keys.length ? await db.cashSettlement.findMany({ where: { OR: keys.map((k) => { const [guideId, sourceJobSheetId] = k.split("|"); return { guideId, sourceJobSheetId }; }) }, select: { guideId: true, sourceJobSheetId: true, status: true, settlementNo: true } }) : [];
+  const handIn = new Map(settlements.map((s) => [`${s.guideId}|${s.sourceJobSheetId}`, s]));
   return sales.map((s) => {
     const v = saleView(s, s.sourceJobSheet.ref);
     return { saleNo: s.saleNo, guideId: s.sellingGuideId, jobRef: s.sourceJobSheet.ref, jobDate: s.sourceJobSheet.date, productName: v.productName, kind: v.kind,
       guests: s.guests, grossSatang: s.grossSatang, status: s.status, recordedAt: s.createdAt.toISOString(), bookings: s.allocations,
-      handIn: handIn.get(`${s.sellingGuideId}|${s.sourceJobSheetId}`) ?? "NOT_SENT" };
+      handInNo: handIn.get(`${s.sellingGuideId}|${s.sourceJobSheetId}`)?.settlementNo ?? null,
+      handIn: handIn.get(`${s.sellingGuideId}|${s.sourceJobSheetId}`)?.status ?? "NOT_SENT" };
   });
 }

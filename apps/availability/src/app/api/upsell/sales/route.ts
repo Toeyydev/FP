@@ -27,9 +27,10 @@ export async function POST(req: NextRequest) {
 
 // GET — finance roles (Admin, operator, accountant) read the guides' cash sales as recorded: what
 // the guide's "Send to Admin" put in front of Admin. Read only.
-export async function GET() {
+// ?q= finds a sale by its Sale Ref, Job Ref or Hand-in Ref (part of one is enough).
+export async function GET(req: NextRequest) {
   const a = await cashActor();
   if (a instanceof NextResponse) return a;
   const no = only(a, "ADMIN", "OPERATOR", "ACCOUNTANT"); if (no) return no;
-  return NextResponse.json({ rows: await listCashSales(prisma) });
+  return NextResponse.json({ rows: await listCashSales(prisma, 100, req.nextUrl.searchParams.get("q") ?? "") });
 }

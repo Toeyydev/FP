@@ -349,3 +349,45 @@ describe("Send to Admin (owner, 20 Nov 2026): the recorded sale is in front of A
     expect((await listCashSales(prisma)).every((r) => r.handIn === "SUBMITTED")).toBe(true);
   });
 });
+
+describe("Job Sheet + Extras cash (owner, 21 Nov 2026): find a sale again, and see where its cash is", () => {
+  it("after the company receives the money the job still lists every Sale Ref, with the Hand-in Ref and the date", async () => {
+    await ready();
+    const sl = await upload();
+    await submitHandInSlips(prisma, guide, { jobSheetId: jobId, slipIds: [sl.id] });
+    const s = await prisma.cashSettlement.findFirstOrThrow();
+    const before = await handInView(prisma, G, jobId);
+    expect(before.status).toBe("SUBMITTED");
+    expect(before.sales.map((x) => x.grossSatang).sort()).toEqual([20000, 60000]);
+    await review(sl.id, { amount: 80000, ref: "KB-7731-0901" });
+    await confirmHandIn(prisma, admin, { settlementId: s.id, submissionNo: 1, slips: await tokens([sl.id]) });
+    const v = await handInView(prisma, G, jobId);
+    expect(v.status).toBe("CONFIRMED");
+    expect(v.heldSatang).toBe(0); // nothing left with the guide…
+    expect(v.sales.map((x) => x.saleNo).sort()).toEqual(before.sales.map((x) => x.saleNo).sort()); // …and every Sale Ref still listed
+    expect(v.settlementNo).toBe(s.settlementNo);
+    expect(v.history.at(-1)?.confirmedAt).toBeTruthy();
+    expect(v.slips.filter((x) => x.confirmed)).toHaveLength(1);
+  });
+
+  it("finance finds a sale by its Sale Ref, its Job Ref or its job's Hand-in Ref — part of one is enough", async () => {
+    await ready();
+    await sale(2, guide2, job2Id); // another guide's job: never in a search for G's refs
+    const all = await listCashSales(prisma);
+    expect(all).toHaveLength(3);
+    const mine = all.filter((r) => r.guideId === G);
+    const one = mine[0];
+    expect((await listCashSales(prisma, 100, one.saleNo)).map((r) => r.saleNo)).toEqual([one.saleNo]);
+    expect((await listCashSales(prisma, 100, one.saleNo.toLowerCase())).map((r) => r.saleNo)).toEqual([one.saleNo]);
+    expect(one.jobRef).toBeTruthy();
+    expect((await listCashSales(prisma, 100, one.jobRef!)).map((r) => r.saleNo).sort()).toEqual(mine.map((r) => r.saleNo).sort());
+    expect(mine.every((r) => r.handInNo === null)).toBe(true);
+    await upload(); // the hand-in (and its FOLK-CSH number) exists from the first slip
+    const s = await prisma.cashSettlement.findFirstOrThrow({ where: { guideId: G } });
+    const byHandIn = await listCashSales(prisma, 100, s.settlementNo);
+    expect(byHandIn.map((r) => r.saleNo).sort()).toEqual(mine.map((r) => r.saleNo).sort());
+    expect(byHandIn.every((r) => r.handInNo === s.settlementNo)).toBe(true);
+    expect(await listCashSales(prisma, 100, "NO-SUCH-REF-0000")).toEqual([]);
+    expect(await listCashSales(prisma, 100, "   ")).toHaveLength(3);
+  });
+});

@@ -340,7 +340,7 @@ try {
   await goto(desk, "/upsell-cash");
   await desk.waitForSelector(".js-cash-sale", { timeout: 15000 });
   const adminRow = await desk.$eval(".js-cash-sale", (e) => e.innerText);
-  check("Admin's Extras cash lists the sale: guide, job, bookings × guests, ฿600, cash with the guide", adminRow.includes(sale1.saleNo) && adminRow.includes(GUIDE_ID) && adminRow.includes(sheet.ref) && adminRow.includes("E2E-BK-A × 2") && adminRow.includes("E2E-BK-B × 1") && adminRow.includes("฿600") && adminRow.includes("Cash with the guide"), adminRow);
+  check("Admin's Extras cash lists the sale: guide, job, bookings × guests, ฿600, รอไกด์โอน (cash still with the guide)", adminRow.includes(sale1.saleNo) && adminRow.includes(GUIDE_ID) && adminRow.includes(sheet.ref) && adminRow.includes("E2E-BK-A × 2") && adminRow.includes("E2E-BK-B × 1") && adminRow.includes("฿600") && adminRow.includes("รอไกด์โอน"), adminRow);
   const fa = await fits(desk); check("390px Admin cash-sales list fits", fa.over <= 1, fa.culprits.join(" "));
   await shot(desk, "admin-sales-390");
   await desk.close();

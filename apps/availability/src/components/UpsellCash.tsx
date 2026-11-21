@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import OperatorNav from "@/components/OperatorNav";
+import { handInLabel } from "@/components/upsell/hand-in-status";
 
 // Finance › Extras cash (Tour Upsell PR4; mockup v9a approved with Codex's copy fixes). The guides'
 // hand-ins to confirm or return, sale reversals to decide, the receiving account and the VAT
@@ -13,7 +14,7 @@ type Slip = { id: string; seq: number; status: string; url: string | null; uploa
   reviewed: { amountSatang: number; transferredAt: string; bankRef: string; accountId: string; accountVersion: number; toAccount: string; reviewedAt: string } | null; transferId: string | null };
 type HandIn = { id: string; settlementNo: string; guideId: string; jobRef: string | null; jobDate: string; status: string; submissionNo: number; returnedReason: string | null; owedSatang: number;
   submission: { submissionNo: number; kind: string; expectedSatang: number; slipIds: string[]; totalSatang: number; transferIds: string[]; status: string; saleRefs: string[] } | null; transfers: Transfer[]; slips: Slip[] };
-type CashSale = { saleNo: string; guideId: string; jobRef: string | null; jobDate: string; productName: string; kind: string; guests: number; grossSatang: number; status: string; recordedAt: string; bookings: { bookingRef: string; guests: number; status: string }[]; handIn: string };
+type CashSale = { saleNo: string; guideId: string; jobRef: string | null; jobDate: string; productName: string; kind: string; guests: number; grossSatang: number; status: string; recordedAt: string; bookings: { bookingRef: string; guests: number; status: string }[]; handIn: string; handInNo: string | null };
 type KnownAccount = { id: string; version: number; label: string; display: string; retired: boolean };
 type Reversal = { id: string; kind: string; status: string; reason: string; saleNo: string; grossSatang: number; guideId: string; jobRef: string | null; guideAffirmationText: string | null; guideAffirmedAt: string | null; refundAmountSatang: number | null; refundPaidBy: string | null; refundEvidenceUrl: string | null; createdAt: string };
 type Account = { id: string; version: number; label: string; display: string; peakPaymentMethodName: string | null; confirmedAt: string; retiredAt: string | null };
@@ -230,26 +231,36 @@ function SlipReview({ h, slip, known, onSaved, onCancel }: { h: HandIn; slip: Sl
   );
 }
 
-/** The guides' cash sales as recorded ("Send to Admin" on the job sheet) — read only. */
-const HANDIN: Record<string, string> = { NOT_SENT: "Cash with the guide", DRAFT: "Cash with the guide", SUBMITTED: "Slip sent — check it above", RETURNED: "Returned to the guide", CONFIRMED: "Handed in", REVERSED: "Reversed" };
+/** The guides' cash sales as recorded ("Send to Admin" on the job sheet) — read only. Searchable by
+ *  Sale Ref, Job Ref or Hand-in Ref (the server looks, so an older sale is found too). */
 function CashSalesPanel() {
   const [rows, setRows] = useState<CashSale[] | null>(null);
-  useEffect(() => { void call("/api/upsell/sales", { cache: "no-store" }).then((d) => setRows(d.rows)).catch(() => setRows([])); }, []);
+  const [q, setQ] = useState(""), [shown, setShown] = useState("");
+  const find = useCallback((term: string) => {
+    setRows(null); setShown(term.trim());
+    void call(`/api/upsell/sales${term.trim() ? `?q=${encodeURIComponent(term.trim())}` : ""}`, { cache: "no-store" }).then((d) => setRows(d.rows)).catch(() => setRows([]));
+  }, []);
+  useEffect(() => { find(""); }, [find]);
   return (
     <section className="panel js-cash-sales" style={{ marginBottom: 14 }}>
       <div className="op-toolbar"><b>Cash sales from guides</b><span className="muted" style={{ fontSize: 12 }}>Sent by the guide when the cash was received · read only</span></div>
+      <form role="search" onSubmit={(e) => { e.preventDefault(); find(q); }} style={{ padding: "0 10px 8px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input className="search js-cash-search" type="search" aria-label="Find by Sale Ref, Job Ref or Hand-in Ref" placeholder="Sale Ref, Job Ref or Hand-in Ref" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: "1 1 200px", minWidth: 0 }} />
+        <button className="btn sm" type="submit">Find</button>
+        {shown && <button className="btn sm" type="button" onClick={() => { setQ(""); find(""); }}>Show all</button>}
+      </form>
       {rows == null ? <div style={{ padding: 14 }}><div className="skel-row" /></div>
-        : rows.length === 0 ? <div className="op-empty" style={{ padding: 18 }}>No cash sales yet.</div>
+        : rows.length === 0 ? <div className="op-empty" style={{ padding: 18 }}>{shown ? `Nothing matches “${shown}”.` : "No cash sales yet."}</div>
         : (
           <div style={{ padding: "0 10px 10px", display: "grid", gap: 8 }}>
             {rows.map((r) => (
               <div key={r.saleNo} className="js-cash-sale" style={{ border: "1px solid var(--line)", borderRadius: 10, padding: "8px 10px", display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: "4px 12px", fontSize: 13.5 }}>
                 <span style={{ minWidth: 0, flex: "1 1 220px", wordBreak: "break-word" }}>
                   <b>{r.productName}</b> · {r.guests} {r.guests === 1 ? "guest" : "guests"}{r.status === "REVERSED" ? " · reversed" : ""}
-                  <br /><span className="muted" style={{ fontSize: 12 }}>{r.guideId} · {r.jobRef ?? r.jobDate} · {r.saleNo} · {when(r.recordedAt)}</span>
+                  <br /><span className="muted" style={{ fontSize: 12 }}>{r.guideId} · {r.jobRef ?? r.jobDate} · {r.saleNo}{r.handInNo ? ` · ${r.handInNo}` : ""} · {when(r.recordedAt)}</span>
                   {r.bookings.length > 0 && <><br /><span className="muted" style={{ fontSize: 12 }}>{r.bookings.map((b) => `${b.bookingRef} × ${b.guests}${b.status === "RELEASED" ? " (reversed)" : ""}`).join(" · ")}</span></>}
                 </span>
-                <span style={{ textAlign: "right", whiteSpace: "nowrap" }}><b>{baht(r.grossSatang)}</b><br /><span className="muted" style={{ fontSize: 12 }}>{HANDIN[r.handIn] ?? r.handIn}</span></span>
+                <span style={{ textAlign: "right", whiteSpace: "nowrap" }}><b>{baht(r.grossSatang)}</b><br /><span className="muted js-cash-sale-status" style={{ fontSize: 12 }}>{handInLabel(r.handIn).th}</span></span>
               </div>
             ))}
           </div>

@@ -79,7 +79,7 @@ export default function AccountChartMapping({ canEdit, environment }: { canEdit:
     });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
-    if (!r.ok) { setMsg(d.error === "forbidden" ? "Operator only." : d.error === "unknown-category" ? `Unknown category: ${d.detail}` : "Couldn't save the mappings."); return; }
+    if (!r.ok) { setMsg(d.error === "forbidden" ? "Operator only." : d.error === "unknown-category" ? `Unknown category: ${d.detail}` : d.error === "extras-account-rule" ? `Not saved — ${d.detail}` :"Couldn't save the mappings."); return; }
     setMsg(d.accountChartReady ? "Mappings saved — account chart configured" : "Mappings saved");
     load();
   }

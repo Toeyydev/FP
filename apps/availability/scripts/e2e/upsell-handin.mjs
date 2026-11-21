@@ -199,6 +199,7 @@ try {
   await goto(guide, JOB_PATH);
   const card = await text(guide, ".ups-code");
   check("before transferring the guide sees the memo, the job, the amount owed and the account", (await text(guide, ".js-handin")).includes(memo) && /To hand in/.test(card) && /···7890/.test(card), card.slice(0, 300));
+  check("before transferring the status reads รอไกด์โอน", /รอไกด์โอน/.test(await text(guide, ".js-handin .ups-status-card")));
   // Slip only (owner, 20 Nov 2026): no amount, date, time or reference to type.
   const typed = await guide.$$eval(".js-handin input:not([type=file]), .js-handin select, .js-handin textarea", (els) => els.length);
   check("slip only: the guide's hand-in has no amount, date, time or reference field", typed === 0, `${typed} field(s)`);
@@ -209,8 +210,8 @@ try {
   check("390 px (guide): nothing pushes the page sideways", f1.over <= 0, f1.culprits.join(" "));
   await shot(guide, "guide-slip-ready");
   await tap(guide, ".ups-send");
-  await guide.waitForFunction(() => /ส่งแล้ว รอตรวจสอบ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
-  check("sent: ส่งแล้ว รอตรวจสอบ, cash held unchanged", (await held()) === owed);
+  await guide.waitForFunction(() => /ส่งสลิปแล้ว รอบริษัทตรวจ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
+  check("sent: ส่งสลิปแล้ว รอบริษัทตรวจ with the date sent, cash held unchanged", (await held()) === owed && /Slips sent/.test(await text(guide, ".js-handin .ups-status-card")));
   await shot(guide, "guide-sent");
 
   // ── Admin (phone width): reads the slip, records a short amount → cannot confirm → returns it ──
@@ -255,7 +256,7 @@ try {
   check("returned: the same ref.โอนเงิน", (await text(guide, ".js-handin .ups-transfer-ref-code")).trim() === memo);
   check("returned: the slip stays, do not transfer again", /do not transfer again/i.test(back) && (await guide.$$(".ups-slip")).length === 1, back.slice(0, 300));
   await tap(guide, ".ups-send");
-  await guide.waitForFunction(() => /ส่งแล้ว รอตรวจสอบ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
+  await guide.waitForFunction(() => /ส่งสลิปแล้ว รอบริษัทตรวจ/.test(document.querySelector(".js-handin")?.textContent ?? ""), { timeout: 10000 });
 
   // ── Admin corrects what was recorded (the slip, read again, shows the full amount), ticks, confirms ──
   await goto(desk, "/upsell-cash");
@@ -293,8 +294,45 @@ try {
   check("390 px (Admin): nothing pushes the page sideways", f2.over <= 0, f2.culprits.join(" "));
   await shot(desk, "admin-390");
   await goto(guide, JOB_PATH);
-  check("the guide sees it confirmed and locked", /Confirmed/.test(await text(guide, ".js-handin")) && !(await guide.$(".ups-send")));
+  const doneCard = await text(guide, ".js-handin .ups-status-card");
+  check("the guide sees บริษัทได้รับเงินแล้ว with the date received and the slip, locked, nothing left to transfer",
+    /บริษัทได้รับเงินแล้ว/.test(doneCard) && /Received/.test(doneCard) && !!(await guide.$(".js-handin .ups-status-card a")) && !(await guide.$(".ups-send")) && !(await guide.$(".js-handin .ups-code")), doneCard.slice(0, 300));
   await shot(guide, "guide-confirmed");
+
+  // ── Staff: the same job's Extras cash on the Job Sheet (Finance & accounting), read only ──
+  const saleRefs = (await prisma.upsellSale.findMany({ select: { saleNo: true } })).map((x) => x.saleNo);
+  const handInNo = (await prisma.cashSettlement.findFirstOrThrow()).settlementNo;
+  for (const [w, h, name] of [[1280, 900, "desktop"], [390, 844, "390"]]) {
+    await desk.setViewport({ width: w, height: h, isMobile: w < 600, hasTouch: w < 600 });
+    await goto(desk, JOB_PATH);
+    await desk.waitForSelector(".js-extras-staff .ups-status-card", { timeout: 15000 });
+    const staff = await text(desk, ".js-extras-staff");
+    check(`staff Job Sheet (${name}): every Sale Ref, the Job Ref, the Hand-in Ref, บริษัทได้รับเงินแล้ว with the date and the slip — no buttons`,
+      saleRefs.every((r) => staff.includes(r)) && staff.includes(sheetRef) && staff.includes(handInNo) && /บริษัทได้รับเงินแล้ว/.test(staff) && /Received/.test(staff)
+        && !!(await desk.$(".js-extras-staff .ups-status-card a")) && (await desk.$$(".js-extras-staff button")).length === 0, staff.slice(0, 400));
+    const f5 = await fits(desk);
+    check(`staff Job Sheet (${name}): nothing pushes the page sideways`, f5.over <= 0, f5.culprits.join(" "));
+    await shot(desk, `staff-jobsheet-extras-${name}`);
+  }
+
+  // ── Finance › Extras cash: find the sale again by Sale Ref, Job Ref and Hand-in Ref ──
+  await goto(desk, "/upsell-cash");
+  await desk.waitForSelector(".js-cash-search");
+  for (const term of [saleRefs[0], sheetRef, handInNo]) {
+    await setVal(".js-cash-search", term);
+    await desk.click(".js-cash-sales button[type=submit]");
+    await desk.waitForFunction((t) => { const p = document.querySelector(".js-cash-sales"); return !p?.querySelector(".skel-row") && (p?.textContent ?? "").includes(t); }, { timeout: 10000 }, term);
+    const found = await desk.$$eval(".js-cash-sale", (els) => els.map((e) => e.textContent ?? ""));
+    check(`Extras cash search (${term === saleRefs[0] ? "Sale Ref" : term === sheetRef ? "Job Ref" : "Hand-in Ref"}): finds the sale(s), received by the company`,
+      found.length >= 1 && found.every((x) => /บริษัทได้รับเงินแล้ว/.test(x)) && (term !== saleRefs[0] || found.length === 1), found.join(" | ").slice(0, 300));
+  }
+  await setVal(".js-cash-search", "NO-SUCH-REF-0000");
+  await desk.click(".js-cash-sales button[type=submit]");
+  await desk.waitForFunction(() => /Nothing matches/.test(document.querySelector(".js-cash-sales")?.textContent ?? ""), { timeout: 10000 });
+  check("Extras cash search: an unknown ref finds nothing", (await desk.$$(".js-cash-sale")).length === 0);
+  const f6 = await fits(desk);
+  check("390 px (Admin, Extras cash search): nothing pushes the page sideways", f6.over <= 0, f6.culprits.join(" "));
+  await goto(desk, "/upsell-cash");
 
   // ── PR8: the Admin records the accountant's answers and confirms the tax profile (390 px) ──
   await desk.waitForSelector(".js-tax-confirm .js-tax-agree");
