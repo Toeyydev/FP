@@ -365,6 +365,10 @@ export async function GET(req: NextRequest) {
       // to an expense account, so they carry NULL rather than a meaningless
       // "UNMAPPED / BLOCKED" that a later caller could wrongly count as a blocker.
       rows: exps.map((e) => (isReviewExpense(e) ? null : { mappingStatus: expenseMappingStatus(e, accounts), disposition: expenseDisposition(e, accounts) })),
+      // The category → account chart itself, so the screen can re-derive each row's status
+      // from what is on screen while it is being edited (rows above describe the SAVED sheet,
+      // by index — stale, and on the wrong row, once a line is added, removed or recategorised).
+      accounts,
     };
   })();
 
