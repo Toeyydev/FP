@@ -95,13 +95,29 @@ async function jobPax(db: Db | Tx, s: SheetRow): Promise<number> {
 
 /** Why this job cannot sell right now — or null if it can. Checked in this order. */
 async function closedReason(db: Db | Tx, s: SheetRow, today: string): Promise<{ code: string; message: string } | null> {
-  if (s.date !== today) return { code: "NOT_TODAY", message: "Extras are sold on the day of the job only." };
   const [assignment, report] = await Promise.all([
     db.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: s.guideId, date: s.date, slotIdx: s.slotIdx } }, select: { id: true } }),
     db.tourReport.findUnique({ where: { guideId_date_slotIdx: { guideId: s.guideId, date: s.date, slotIdx: s.slotIdx } }, select: { id: true } }),
   ]);
   if (!assignment) return { code: "JOB_CANCELLED", message: "This job is no longer assigned to you." };
+  // Report first: a past job whose report is sent is closed for selling AND open for the hand-in
+  // (the guide's screen shows the hand-in on REPORT_SENT) — e.g. a sale the office recorded later.
   if (report) return { code: "REPORT_SENT", message: "The end-tour report is sent — nothing more can be sold on this job." };
+  if (s.date !== today) return { code: "NOT_TODAY", message: "Extras are sold on the day of the job only." };
+  return null;
+}
+
+/** Why the office cannot record a sale on this job now — or null. The job may be past and its
+ *  report sent; it must still be the guide's, the cash date real, and the hand-in still open. */
+async function officeClosedReason(db: Db | Tx, s: SheetRow, today: string, receivedOn: string): Promise<{ code: string; message: string } | null> {
+  if (s.date > today) return { code: "NOT_YET", message: "The tour has not happened yet — the guide records sales on the day." };
+  if (receivedOn < s.date || receivedOn > today) return { code: "BAD_DATE", message: `The cash was received on the tour day (${s.date}) or later, and not after today.` };
+  const [assignment, sent] = await Promise.all([
+    db.assignment.findUnique({ where: { guideId_date_slotIdx: { guideId: s.guideId, date: s.date, slotIdx: s.slotIdx } }, select: { id: true } }),
+    db.cashSettlement.findFirst({ where: { guideId: s.guideId, sourceJobSheetId: s.id, status: { in: ["SUBMITTED", "CONFIRMED"] } }, select: { status: true } }),
+  ]);
+  if (!assignment) return { code: "JOB_CANCELLED", message: `This job is no longer assigned to ${s.guideId}.` };
+  if (sent) return { code: "HAND_IN_SENT", message: sent.status === "SUBMITTED" ? "The guide's hand-in for this job is with Admin — return it first, then record the sale." : "This job's hand-in is confirmed and closed." };
   return null;
 }
 
@@ -231,7 +247,11 @@ export async function jobExtras(db: Db, job: { guideId: string; date: string; sl
 
 // ── recording a sale ─────────────────────────────────────────────────────────
 
-type Actor = { userId: string; guideId: string };
+/** Who records the sale. `guideId` is always the job's guide — the one holding the cash. `office`
+ *  is set when an Admin or operator records it for the guide (owner, 22 Nov 2026: the guide tells
+ *  the office the guest paid on site; the office records it on the Job Sheet). */
+type Actor = { userId: string; guideId: string; office?: OfficeEntry };
+export type OfficeEntry = { role: "ADMIN" | "OPERATOR"; reason: string; receivedOn: string };
 
 /** The sale this key already made, for this guide — or null. */
 export async function saleByKey(db: Db, requestKey: string, guideId: string): Promise<SaleView | null> {
@@ -298,7 +318,10 @@ export async function recordRouteExtensionSale(db: Db, body: unknown, actor: Act
     },
     receiptExtra: () => ({ allocations: allocationPayload(snap) }),
     // The guide's one action — "ยืนยันเก็บเงินแล้ว ฿…" — is the acknowledgement kept with each allocation.
-    async after(tx, sale) { await writeAllocations(tx, sale.id, snap, { text: cashAckText(req.guests * req.expectedUnitPriceSatang), by: actor.userId, at: now }); },
+    async after(tx, sale) {
+      const text = actor.office ? `Recorded by office (${actor.office.role}) for ${actor.guideId}: ${actor.office.reason}`.slice(0, 500) : cashAckText(req.guests * req.expectedUnitPriceSatang);
+      await writeAllocations(tx, sale.id, snap, { text, by: actor.userId, at: now });
+    },
   });
 }
 
@@ -323,14 +346,15 @@ async function recordCashSale(db: Db, req: SaleRequest, actor: Actor, now: Date,
         SELECT "id", "ref", "guideId", "date", "slotIdx", "tourId", "bookings" FROM "JobSheet" WHERE "id" = ${req.jobSheetId} FOR UPDATE`;
       const sheet = rows[0];
       if (!sheet || sheet.guideId !== actor.guideId) throw new UpsellSaleError(403, "NOT_YOUR_JOB", "You can sell only on your own job.");
-      const closed = await closedReason(tx, sheet, today);
+      const closed = actor.office ? await officeClosedReason(tx, sheet, today, actor.office.receivedOn) : await closedReason(tx, sheet, today);
       if (closed) throw new UpsellSaleError(409, closed.code, closed.message);
 
       const version = await tx.upsellProductVersion.findUnique({ where: { id: req.productVersionId }, include: { product: true, taxProfile: true } });
       if (!version || version.product.productType !== spec.type) throw new UpsellSaleError(404, "NO_PRODUCT", "No such product.");
       const wrong = spec.refuseVersion?.(version);
       if (wrong) throw new UpsellSaleError(409, "VERSION_NOT_SELLABLE", wrong);
-      const onSale = (await sellable(tx, sheet.tourId, today, spec.type)).find((x) => x.product.id === version.productId);
+      // The office records a sale after the tour: the version on sale on the tour's day applies.
+      const onSale = (await sellable(tx, sheet.tourId, actor.office ? sheet.date : today, spec.type)).find((x) => x.product.id === version.productId);
       if (!onSale) throw new UpsellSaleError(409, "NOT_ON_SALE", `${version.product.productName} is not on sale on this job now.`);
       if (onSale.version.id !== version.id || version.unitPriceSatang !== req.expectedUnitPriceSatang) {
         throw new UpsellSaleError(409, "PRICE_CHANGED", `The price is now ฿${(onSale.version.unitPriceSatang / 100).toLocaleString("en-US")}. Check with the guest, then start again.`,
@@ -369,11 +393,12 @@ async function recordCashSale(db: Db, req: SaleRequest, actor: Actor, now: Date,
       // advance — receiptCredit decides).
       const extra = spec.receiptExtra?.() ?? {};
       const receiptEvent = await recordSaleReceipt(tx, { saleId: sale.id, saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross,
-        revenueCategory: version.revenueCategory, taxProfileId: version.taxProfileId, paymentDate: today, serviceDate: sheet.date, ...extra });
+        revenueCategory: version.revenueCategory, taxProfileId: version.taxProfileId, paymentDate: actor.office?.receivedOn ?? today, serviceDate: sheet.date, ...extra });
       await tx.auditLog.create({
         data: {
-          actorId: actor.userId, actorRole: "GUIDE", action: "upsell.sale.recorded", entityType: "UpsellSale", entityId: sale.id,
-          detail: { saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross, method: "CASH", ...(extra as Record<string, unknown>) } as Prisma.InputJsonValue,
+          actorId: actor.userId, actorRole: actor.office?.role ?? "GUIDE", action: actor.office ? "upsell.sale.recorded_by_office" : "upsell.sale.recorded", entityType: "UpsellSale", entityId: sale.id,
+          detail: { saleNo, jobRef, productCode: version.product.productCode, version: version.version, guests: req.guests, grossSatang: gross, method: "CASH", ...(extra as Record<string, unknown>),
+            ...(actor.office ? { forGuideId: actor.guideId, reason: actor.office.reason, receivedOn: actor.office.receivedOn } : {}) } as Prisma.InputJsonValue,
         },
       });
       await spec.after?.(tx, sale);
@@ -440,11 +465,11 @@ export async function recordWalkInSale(db: Db, body: unknown, actor: Actor, now 
       const name = walkInDisplayName(saleNo, leadName);
       const b = await tx.booking.create({ data: { source: "walk-in", externalId: saleNo, confirmationCode: saleNo, tourId: sheet.tourId, date: sheet.date, slotIdx: sheet.slotIdx, pax: req.guests,
         customerName: name, status: "ASSIGNED", assignedGuideId: sheet.guideId, paymentStatus: "paid", datePinned: true, bookingDate: sheet.date,
-        notes: `Walk-in seat ${saleNo}, paid to the guide in cash` }, select: { id: true } });
+        notes: `Walk-in seat ${saleNo}, paid to the guide in cash${actor.office ? ` — recorded by office: ${actor.office.reason}` : ""}`.slice(0, 1000) }, select: { id: true } });
       const rows = Array.isArray(sheet.bookings) ? (sheet.bookings as unknown as SheetGuestRow[]) : [];
       await tx.jobSheet.update({ where: { id: sheet.id }, data: { bookings: [...rows, { name, bookingNo: saleNo, bookedPax: req.guests, actualPax: null, tickets: "", status: "" }] as unknown as Prisma.InputJsonValue } });
       await tx.assignment.updateMany({ where: { guideId: sheet.guideId, date: sheet.date, slotIdx: sheet.slotIdx }, data: { pax: { increment: req.guests } } });
-      await tx.auditLog.create({ data: { actorId: actor.userId, actorRole: "GUIDE", action: "upsell.walk_in_booked", entityType: "Booking", entityId: b.id,
+      await tx.auditLog.create({ data: { actorId: actor.userId, actorRole: actor.office?.role ?? "GUIDE", action: "upsell.walk_in_booked", entityType: "Booking", entityId: b.id,
         detail: { saleNo, jobRef: sheet.ref, guests: req.guests, named: !!leadName?.trim() } } });
       return { serviceBookingId: b.id };
     },
@@ -507,4 +532,60 @@ export async function listCashSales(db: Db, take = 100, q = ""): Promise<CashSal
       handInNo: handIn.get(`${s.sellingGuideId}|${s.sourceJobSheetId}`)?.settlementNo ?? null,
       handIn: handIn.get(`${s.sellingGuideId}|${s.sourceJobSheetId}`)?.status ?? "NOT_SENT" };
   });
+}
+
+// ── the office records a sale for the guide (owner, 22 Nov 2026) ─────────────
+
+/** What the office adds to a sale request: the kind, why, and the day the guide got the cash. */
+export const OFFICE_REQUEST = z.object({
+  kind: z.enum(["ROUTE_EXTENSION", "WALK_IN"]),
+  reason: z.string().trim().min(5, "Say why the office is recording it").max(300),
+  receivedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a date"),
+});
+
+/**
+ * The guide told the office a guest paid them cash on the tour — the 2 temples (Route Extension)
+ * or the tour itself (walk-in seat) — and did not record it. An Admin or operator records it on the
+ * Job Sheet with a reason and the day the cash was received. Everything else is the guide's own
+ * sale: the guide holds the cash (custody), hands it in with ref = the Job Ref, and an Admin
+ * confirms it. Refused once the job's hand-in is with Admin or confirmed, and before the tour.
+ */
+export async function recordOfficeSale(db: Db, body: unknown, office: { userId: string; role: "ADMIN" | "OPERATOR" }, now = new Date()): Promise<{ sale: SaleView; replay: boolean }> {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const { kind, reason, receivedOn, ...rest } = b;
+  const o = OFFICE_REQUEST.safeParse({ kind, reason, receivedOn });
+  if (!o.success) throw new UpsellSaleError(400, "BAD_REQUEST", o.error.issues[0]?.message ?? "Check the request.");
+  const jobSheetId = typeof rest.jobSheetId === "string" ? rest.jobSheetId : "";
+  const head = jobSheetId ? await db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { guideId: true } }) : null;
+  if (!head) throw new UpsellSaleError(404, "NO_JOB", "No such job.");
+  const actor: Actor = { userId: office.userId, guideId: head.guideId, office: { role: office.role, reason: o.data.reason, receivedOn: o.data.receivedOn } };
+  return o.data.kind === "WALK_IN" ? recordWalkInSale(db, rest, actor, now) : recordRouteExtensionSale(db, rest, actor, now);
+}
+
+export type OfficeExtras = {
+  jobSheetId: string; guideId: string; jobRef: string | null; date: string;
+  closed: { code: string; message: string } | null;
+  products: { kind: "ROUTE_EXTENSION" | "WALK_IN"; productCode: string; name: string; productVersionId: string; unitPriceSatang: number; guestsLeft: number; rows?: GuestRow[] }[];
+};
+
+/** What the office may record on this job now (the same rules the sale checks), for the Job Sheet. */
+export async function officeExtras(db: Db, jobSheetId: string, now = new Date()): Promise<OfficeExtras | null> {
+  const sheet = await db.jobSheet.findUnique({ where: { id: jobSheetId }, select: { id: true, ref: true, guideId: true, date: true, slotIdx: true, tourId: true, bookings: true } });
+  if (!sheet) return null;
+  const today = bangkokToday(now);
+  const closed = await officeClosedReason(db, sheet, today, sheet.date > today ? today : sheet.date);
+  const base = { jobSheetId: sheet.id, guideId: sheet.guideId, jobRef: sheet.ref, date: sheet.date, closed };
+  if (closed) return { ...base, products: [] };
+  const pax = await jobPax(db, sheet);
+  const rte = await Promise.all((await sellable(db, sheet.tourId, sheet.date)).map(async ({ product, version }) => {
+    const c = await routeExtensionCandidates(db, sheet, product.id);
+    return { kind: "ROUTE_EXTENSION" as const, productCode: product.productCode, name: product.productName, productVersionId: version.id, unitPriceSatang: version.unitPriceSatang,
+      guestsLeft: Math.min(c.jobRemaining, Math.max(0, pax - (await guestsSold(db, sheet.id, product.id)))), rows: c.rows.map(guestRow) };
+  }));
+  const walk = (await sellable(db, sheet.tourId, sheet.date, "JOIN_SOURCE_TOUR")).filter(({ version }) => version.revenueCategory === REVENUE_CATEGORY.JOIN_SOURCE_TOUR);
+  const ota = walk.some(({ version }) => !version.allowsOtaMix)
+    ? await db.booking.count({ where: { tourId: sheet.tourId, date: sheet.date, slotIdx: sheet.slotIdx, status: { in: LIVE_BOOKING }, NOT: { source: "walk-in" } } }) : 0;
+  const seats = walk.map(({ product, version }) => ({ kind: "WALK_IN" as const, productCode: product.productCode, name: product.productName, productVersionId: version.id,
+    unitPriceSatang: version.unitPriceSatang, guestsLeft: !version.allowsOtaMix && ota > 0 ? 0 : Math.max(0, PAX_PER_GUIDE - pax) }));
+  return { ...base, products: [...rte, ...seats] };
 }

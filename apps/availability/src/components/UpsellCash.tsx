@@ -12,10 +12,10 @@ import { handInLabel } from "@/components/upsell/hand-in-status";
 type Transfer = { id: string; seq: number; amountSatang: number; transferredAt: string; bankRef: string; slipUrl: string | null; toAccount: string; status: string; withdrawnReason: string | null };
 type Slip = { id: string; seq: number; status: string; url: string | null; uploadedAt: string; removedReason: string | null; shownAccount: { id: string; version: number; display: string }; reviewVersion: number;
   reviewed: { amountSatang: number; transferredAt: string; bankRef: string; accountId: string; accountVersion: number; toAccount: string; reviewedAt: string } | null; transferId: string | null };
-type HandIn = { id: string; settlementNo: string; guideId: string; jobRef: string | null; jobDate: string; status: string; submissionNo: number; returnedReason: string | null; owedSatang: number;
+export type HandIn = { id: string; settlementNo: string; guideId: string; jobRef: string | null; jobDate: string; status: string; submissionNo: number; returnedReason: string | null; owedSatang: number;
   submission: { submissionNo: number; kind: string; expectedSatang: number; slipIds: string[]; totalSatang: number; transferIds: string[]; status: string; saleRefs: string[] } | null; transfers: Transfer[]; slips: Slip[] };
 type CashSale = { saleNo: string; guideId: string; jobRef: string | null; jobDate: string; productName: string; kind: string; guests: number; grossSatang: number; status: string; recordedAt: string; bookings: { bookingRef: string; guests: number; status: string }[]; handIn: string; handInNo: string | null };
-type KnownAccount = { id: string; version: number; label: string; display: string; retired: boolean };
+export type KnownAccount = { id: string; version: number; label: string; display: string; retired: boolean };
 type Reversal = { id: string; kind: string; status: string; reason: string; saleNo: string; grossSatang: number; guideId: string; jobRef: string | null; guideAffirmationText: string | null; guideAffirmedAt: string | null; refundAmountSatang: number | null; refundPaidBy: string | null; refundEvidenceUrl: string | null; createdAt: string };
 type Account = { id: string; version: number; label: string; display: string; peakPaymentMethodName: string | null; confirmedAt: string; retiredAt: string | null };
 type Method = { id: string; name?: string | null; bankName?: string | null; accountNumber?: string | null };
@@ -104,7 +104,7 @@ export default function UpsellCash({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function ConfirmDialog({ h, onClose, onDone }: { h: HandIn; onClose: () => void; onDone: (m: string) => Promise<void> }) {
+export function ConfirmDialog({ h, onClose, onDone }: { h: HandIn; onClose: () => void; onDone: (m: string) => Promise<void> }) {
   const sub = h.submission!;
   const sent = h.transfers.filter((t) => sub.transferIds.includes(t.id));
   const [ticked, setTicked] = useState<Set<string>>(new Set());
@@ -146,7 +146,7 @@ function ConfirmDialog({ h, onClose, onDone }: { h: HandIn; onClose: () => void;
 // the guide was shown is the default; checked explicitly). The tick confirms exactly the review
 // version on screen: if another Admin changed a slip since, Confirm is refused — reload.
 const bkk = (iso: string) => new Date(new Date(iso).getTime() + 7 * 3600_000).toISOString();
-function SlipsDialog({ h, known, onClose, onDone, onReload, onReturn }: { h: HandIn; known: KnownAccount[]; onClose: () => void; onDone: (m: string) => Promise<void>; onReload: () => Promise<void>; onReturn: () => void }) {
+export function SlipsDialog({ h, known, onClose, onDone, onReload, onReturn }: { h: HandIn; known: KnownAccount[]; onClose: () => void; onDone: (m: string) => Promise<void>; onReload: () => Promise<void>; onReturn: () => void }) {
   const sub = h.submission!;
   const slips = h.slips.filter((x) => sub.slipIds.includes(x.id));
   const [ticked, setTicked] = useState<Map<string, number>>(new Map());
@@ -269,7 +269,7 @@ function CashSalesPanel() {
   );
 }
 
-function ReturnDialog({ h, onClose, onDone }: { h: HandIn; onClose: () => void; onDone: (m: string) => Promise<void> }) {
+export function ReturnDialog({ h, onClose, onDone }: { h: HandIn; onClose: () => void; onDone: (m: string) => Promise<void> }) {
   const [reason, setReason] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
   const go = async () => {
     setBusy(true); setErr("");
@@ -553,5 +553,36 @@ function PeakPanel({ isAdmin, onDone }: { isAdmin: boolean; onDone: (m: string) 
       )}
       {err && <div className="ob bad" role="alert" style={{ whiteSpace: "normal" }}>{err}</div>}
     </section>
+  );
+}
+
+/**
+ * The Admin's check of one job's hand-in, on the Job Sheet (owner, 22 Nov 2026: the guide
+ * transfers with ref = the Job Ref; an Admin checks it on the Job Sheet). The same dialogs and the
+ * same server rules as Finance › Extras cash — only where it is opened differs. Draws nothing
+ * unless the hand-in is with Admin (SUBMITTED) and the person is an Admin.
+ */
+export function HandInDecide({ settlementNo, isAdmin, onChanged }: { settlementNo: string | null; isAdmin: boolean; onChanged: () => Promise<void> }) {
+  const [h, setH] = useState<HandIn | null>(null);
+  const [known, setKnown] = useState<KnownAccount[]>([]);
+  const [open, setOpen] = useState<"check" | "return" | null>(null);
+  const [msg, setMsg] = useState("");
+  const load = useCallback(async () => {
+    if (!settlementNo || !isAdmin) { setH(null); return; }
+    const d = await call("/api/upsell/settlements?status=SUBMITTED", { cache: "no-store" }).catch(() => ({ rows: [] }));
+    setH(((d.rows ?? []) as HandIn[]).find((x) => x.settlementNo === settlementNo) ?? null); setKnown(d.accounts ?? []);
+  }, [settlementNo, isAdmin]);
+  useEffect(() => { void load(); }, [load]);
+  const done = async (m: string) => { setMsg(m); setOpen(null); await load(); await onChanged(); };
+  if (!h || h.status !== "SUBMITTED" || !h.submission) return msg ? <div className="ob ok" role="status" style={{ display: "block", whiteSpace: "normal", marginTop: 6 }}>{msg}</div> : null;
+  return (
+    <div className="js-handin-decide" style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <button className="btn sm primary js-handin-check" onClick={() => setOpen("check")}>{h.submission.kind === "SLIPS" ? "Check the slip & confirm…" : "Confirm…"}</button>
+      <button className="btn sm danger js-handin-return" onClick={() => setOpen("return")}>Return to guide…</button>
+      {open === "check" && (h.submission.kind === "SLIPS"
+        ? <SlipsDialog h={h} known={known} onClose={() => setOpen(null)} onDone={done} onReload={load} onReturn={() => setOpen("return")} />
+        : <ConfirmDialog h={h} onClose={() => setOpen(null)} onDone={done} />)}
+      {open === "return" && <ReturnDialog h={h} onClose={() => setOpen(null)} onDone={done} />}
+    </div>
   );
 }
