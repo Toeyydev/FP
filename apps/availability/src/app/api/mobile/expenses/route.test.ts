@@ -7,7 +7,7 @@ const prismaMock = vi.hoisted(() => ({
   assignment: { findUnique: vi.fn() },
   tourPayment: { findUnique: vi.fn() },
   payrollStatus: { findUnique: vi.fn() },
-  jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })), create: vi.fn() },
   booking: { findMany: vi.fn() },
   tour: { findUnique: vi.fn() },
   tourReport: { findUnique: vi.fn() },
@@ -51,26 +51,27 @@ beforeEach(async () => {
 describe("POST /api/mobile/expenses", () => {
   it("answers 401 without a bearer token, and writes nothing", async () => {
     expect((await post(body)).status).toBe(401);
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed body", async () => {
     for (const b of [{}, { ...body, date: "2026-9-12" }, { ...body, slotIdx: -1 }, { ...body, expenses: [{ description: "x" }] }, { ...body, expenses: Array(41).fill({ description: "x", price: 1, pax: 1 }) }]) {
       expect((await post(b, token)).status, JSON.stringify(b).slice(0, 40)).toBe(400);
     }
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
   });
 
   it("files the report for the token's own guide", async () => {
     const res = await post(body, token);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, driveLink: null });
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-12", slotIdx: 0 } });
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].where).toMatchObject({ id: "js_1" });
+    expect(prismaMock.jobSheet.findUnique.mock.calls.at(-1)![0].where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2026-09-12", slotIdx: 0 } });
   });
 
   it("takes the guide from the token, whatever guideId the body names", async () => {
     expect((await post({ ...body, guideId: "G-999" }, token)).status).toBe(200);
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].where.guideId_date_slotIdx.guideId).toBe("G-001");
+    expect(prismaMock.jobSheet.findUnique.mock.calls.at(-1)![0].where.guideId_date_slotIdx.guideId).toBe("G-001");
   });
 
   it("refuses a departure the guide was never given, and writes nothing", async () => {
@@ -78,7 +79,7 @@ describe("POST /api/mobile/expenses", () => {
     const res = await post(body, token);
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe("not-assigned");
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
     expect(prismaMock.jobSheet.create).not.toHaveBeenCalled();
   });
 
@@ -87,7 +88,7 @@ describe("POST /api/mobile/expenses", () => {
     const res = await post(body, token);
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe("already-paid");
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
     expect(prismaMock.jobSheet.create).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,9 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { notifyOps } from "@/lib/booking-import";
-import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isReviewExpense, type Expense, type PaidBySource } from "@/lib/jobsheet";
+import { thb, defaultExpensesForTour, noShowStatus, DEFAULT_GUIDE_FEE, expenseAmount, isApproved, isReviewExpense, type Expense, type PaidBySource } from "@/lib/jobsheet";
+import { applyGuideReport, type ApplyChange, type ApplyKept, type ApplySkip } from "@/lib/guide-report-apply";
+import type { Row as SnapshotRow } from "@/lib/guide-snapshot";
 import { defaultPayer, expenseKind, PAID_BY_VALUE } from "@/lib/payer-rules";
 import { jobRates, rateDefaultFor, type JobRates } from "@/lib/rate-payer";
 import { canonicalPaidBy } from "@/lib/peak-sync";
@@ -188,7 +190,7 @@ export async function submitGuideExpenses(o: {
   const now = new Date();
   const key = { guideId_date_slotIdx: { guideId, date, slotIdx } };
   const paidRule = await guidePaidRule({ guideId, date, slotIdx, actorRole: o.actorRole, now });
-  const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true, expenses: true, guideExpenses: true } });
+  const existing = await prisma.jobSheet.findUnique({ where: key, select: { id: true, tourId: true, bookings: true, expenses: true, guideExpenses: true, approvalStatus: true } });
   const rates = await jobRates(prisma, { guideId, date, slotIdx });
   // A review reward is the operator's to record — compensation, not something the guide
   // paid on tour. A report never carries one (the form used to be seeded with it).
@@ -230,8 +232,33 @@ export async function submitGuideExpenses(o: {
     return { ...r, noShowPax: ns, status: noShowStatus(ns, P || null), actualPax: Math.max(0, P - ns) };
   });
 
+  // The guide's Water / Bus / Ferry go straight onto the job's Tour Expenses rows (owner,
+  // 22 Nov 2026, lib/guide-report-apply), each with the guide's snapshot; a row the office
+  // corrected since the last report is kept whole. Not once the job sheet is approved or paid:
+  // then the report is kept for the record and the rows stay as approved.
+  let applied: { changed: ApplyChange[]; kept: ApplyKept[]; skipped: ApplySkip[]; locked: boolean } = { changed: [], kept: [], skipped: [], locked: false };
+  const at = now.toISOString();
+  const applyTo = (rows: SnapshotRow[]) => { const r = applyGuideReport(rows, expenses as unknown as Expense[], at); applied = { changed: r.changed, kept: r.kept, skipped: r.skipped, locked: false }; return r; };
+
   if (existing) {
-    await prisma.jobSheet.update({ where: key, data: { guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, bookings: fillActualPax(existing.bookings) } });
+    // Read, decide, write only if the sheet is still the one read (updatedAt): an operator's save
+    // or another submission landing in between makes this read again and decide again, so a
+    // stale copy never overwrites newer rows.
+    let done = false;
+    for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+      const cur = await prisma.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, approvalStatus: true, updatedAt: true, bookings: true } });
+      if (!cur) break;
+      const paid = (await prisma.tourPayment.findUnique({ where: key, select: { status: true } }))?.status === "PAID";
+      const locked = isApproved(cur.approvalStatus) || paid;
+      const stored = (cur.expenses as unknown as SnapshotRow[]) ?? [];
+      const r = locked ? null : applyTo(stored);
+      if (locked) applied = { changed: [], kept: [], skipped: [], locked: true };
+      const rowsMoved = !!r && JSON.stringify(r.rows) !== JSON.stringify(stored);
+      const hit = await prisma.jobSheet.updateMany({ where: { id: cur.id, updatedAt: cur.updatedAt }, data: { guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, bookings: fillActualPax(cur.bookings),
+        ...(rowsMoved ? { expenses: r!.rows as unknown as object[] } : {}) } });
+      done = hit.count > 0;
+    }
+    if (!done) throw Object.assign(new Error("The job sheet kept changing while your report was being saved — please send it again."), { refused: true, status: 409, reasons: ["The job sheet kept changing while your report was being saved — please send it again."] });
   } else {
     // No saved sheet yet — scaffold one that carries the guide's report AND the slot's
     // guests. It used to write `bookings: []`: the guide reports after the tour, so this
@@ -248,7 +275,7 @@ export async function submitGuideExpenses(o: {
     ]);
     const mine = attributableBookings(slotBookings, guideId, { guidesAtSlot, tourId: a?.tourId ?? null, otherSheetRefs: sheetRefs(otherSheets) });
     const guests = fillActualPax(mine.map(toSheetBooking));
-    const created = await prisma.jobSheet.create({ data: { ref: null, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: guests, expenses: defaultExpensesForTour(tour?.name), guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: o.actorId } });
+    const created = await prisma.jobSheet.create({ data: { ref: null, guideId, date, slotIdx, tourId: a?.tourId ?? "", status: "Confirmed", bookings: guests, expenses: applyTo(defaultExpensesForTour(tour?.name)).rows as unknown as object[], guideFee: DEFAULT_GUIDE_FEE, guideExpenses: expenses, guideExpensesAt: now, guideExpensesNote: note, createdById: o.actorId } });
     await ensureJobRef(created.id, date).catch(() => { /* numbered again when an operator opens it */ });
   }
 
@@ -267,6 +294,6 @@ export async function submitGuideExpenses(o: {
   // via the shared folder) get the record with no operator action. Best-effort.
   const driveLink = await saveJobSheetToDrive(guideId, date, slotIdx);
 
-  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, via: o.via ?? "expense-form", ...(o.declaredNone ? { declared: "no-expenses" } : {}), paidBy: { defaultAfterTour: paidRule.apply ? "applied" : paidRule.reason, sources: payers.counts } } });
+  await audit({ actorId: o.actorId, actorRole: o.actorRole, action: "jobsheet.guide_expenses", entityType: "JobSheet", detail: { guideId, date, slotIdx, lines: expenses.length, drive: !!driveLink, rowsChanged: applied.changed, rowsKeptOffice: applied.kept, rowsSkipped: applied.skipped, rowsLocked: applied.locked, via: o.via ?? "expense-form", ...(o.declaredNone ? { declared: "no-expenses" } : {}), paidBy: { defaultAfterTour: paidRule.apply ? "applied" : paidRule.reason, sources: payers.counts } } });
   return { ok: true, driveLink };
 }

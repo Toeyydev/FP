@@ -15,7 +15,7 @@ import TourDayTimeline from "@/components/TourDayTimeline";
 import GuideNextStep from "@/components/GuideNextStep";
 import type { TimelineStep } from "@/lib/tour-day-timeline";
 import { isFoodTourId } from "@/lib/bookings";
-import { adoptReportedExpenses, adoptReportedLine, droppedByAdoption, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, fillDownExpensePax, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, feeIsAdjusted, feeIsLegacyHalf, FEE_ADJUST_OTHER, FEE_ADJUST_REASONS, shownStandardFee, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, type GuidePayType, reviewRewardTotal } from "@/lib/jobsheet";
+import { adoptReportedExpenses, adoptReportedLine, droppedByAdoption, computeTotals, EXPENSE_CATEGORIES, expenseAccountingStatus, expenseAmount, expenseCategory, expenseCategoryLabel, isApproved, isReviewExpense, jobCostBreakdown, uncategorisedExpenseRows, noShowStats, noShowStatus, PEAK_SERVICE_COST_LABEL, reviewBelongsToJob, STANDARD_EXPENSE_DESCRIPTIONS, standardExpenseDescription, upgradeStandardDescriptions, guideFeeWhtRule, feeIsWhtFree, feeIsAdjusted, feeIsLegacyHalf, FEE_ADJUST_OTHER, FEE_ADJUST_REASONS, shownStandardFee, foodCostRows, reportedFoodCost, thb, type Booking, type Expense, type GuideFee, type GuidePayType, reviewRewardTotal } from "@/lib/jobsheet";
 import { PAYMENT_SOURCES } from "@/lib/advance";
 import AdvanceOperations, { type OpsData } from "./AdvanceOperations";
 import { effectivePayer, expectedPayerFor, expenseKind, isOverride, MIN_PAYER_REASON } from "@/lib/payer-rules";
@@ -43,6 +43,7 @@ import GuideAdvanceCard from "@/components/GuideAdvanceCard";
 import GuideTourExpenses from "@/components/GuideTourExpenses";
 import GuideTicketReceipts from "@/components/GuideTicketReceipts";
 import OperatorExpenseReview from "@/components/OperatorExpenseReview";
+import { fillDownKeepingReported, guideReportedLabel, snapshotOf, varianceFromGuide, type Row as SnapshotRow } from "@/lib/guide-snapshot";
 import { fixedItemOf, isAdvanceRow, operatorRowProblems, shownAs, type ReportRow } from "@/lib/guide-fixed-expenses";
 import type { GuideAdvanceCard as GuideAdvanceCardData } from "@/lib/advances/guide-card";
 import { advanceMemo, returnMemo } from "@/lib/bank-memo";
@@ -159,7 +160,6 @@ export default function JobSheetEditor() {
   // Row id → the files behind that expense row (lib/expense-attachments).
   const [attachments, setAttachments] = useState<Record<string, AttachmentView[]>>({});
   // Operator review (owner 2026-11-15): each fixed item's PEAK account and the review history.
-  const [expenseAccounts, setExpenseAccounts] = useState<Record<string, { code: string | null; name: string | null } | null> | undefined>(undefined);
   const [reviewHist, setReviewHist] = useState<{ at: string; action: string; by: string; detail: Record<string, unknown> }[]>([]);
   const [moveOpen, setMoveOpen] = useState(false); // Move departure (components/MoveDepartureDialog)
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
@@ -263,7 +263,7 @@ export default function JobSheetEditor() {
     // The guide reports what they paid on tour — never the review reward (the operator's to record).
     setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).filter((e: Expense) => !isReviewExpense(e)).map((e: Expense) => ({ ...e })));
     setGuideNote(s?.guideExpensesNote ?? "");
-    setExpenseAccounts(d.expenseAccounts ?? undefined); setReviewHist(Array.isArray(d.reviewHistory) ? d.reviewHistory : []);
+    setReviewHist(Array.isArray(d.reviewHistory) ? d.reviewHistory : []);
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
   // Other Tour Cost may have a standing default (set under PEAK sync), but a row
@@ -1535,11 +1535,10 @@ export default function JobSheetEditor() {
             the CATEGORY (lib/jobsheet), never the description. */}
         <div id="js-expenses" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         {canEdit && (
-          // Owner 2026-11-15: review the guide's three fixed items and the Company ADV ticket receipts
-          // here; the accounting rows below stay the job's record (lib/job-expense-review).
+          // The Company ADV ticket receipts are reviewed here; the accounting rows below stay the job's
+          // record (lib/job-expense-review). The guide's Water / Bus / Ferry are compared below.
           <OperatorExpenseReview sheetKey={sheet} jobRef={sheet.ref ?? null} guideLabel={header?.name ? `${sheet.guideId} ${header.name}` : sheet.guideId}
-            reported={(sheet.guideExpenses ?? []) as ReportRow[]} official={sheet.expenses} attachments={attachments}
-            accounts={expenseAccounts} history={reviewHist}
+            official={sheet.expenses} attachments={attachments} history={reviewHist}
             advances={advance.advances as never} settlement={advance.status}
             locked={isApproved((sheet as { approvalStatus?: string | null }).approvalStatus) || !!payment?.paid}
             onChanged={async (m) => { await load(); setMsg(m); }} />
@@ -1596,7 +1595,9 @@ export default function JobSheetEditor() {
                 </td>
                 <td>{(() => {
                   const fixed = standardExpenseDescription(e.description);
-                  return fixed ? (
+                  const snap = snapshotOf(e as SnapshotRow);
+                  const off = varianceFromGuide(e as SnapshotRow);
+                  return fixed ? (<>
                     <select
                       className="js-standard-expense-description"
                       style={{ ...L, cursor: "pointer" }}
@@ -1608,7 +1609,22 @@ export default function JobSheetEditor() {
                       title="Fixed standard Job Sheet item">
                       {STANDARD_EXPENSE_DESCRIPTIONS.map((item) => <option key={item.description} value={item.description}>{item.description}</option>)}
                     </select>
-                  ) : <>
+                    {/* What the guide reported (owner 2026-11-22, lib/guide-snapshot) — the guide's figures,
+                        not the row's: kept when the office changes Price or Qty. A change away from them
+                        needs a reason, which the server also requires. */}
+                    {snap && (
+                      <div className="no-print js-guide-reported" data-differs={off.join(",")} style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 3 }}>
+                        {guideReportedLabel(snap)}{off.length ? <span style={{ color: "#b45309", fontWeight: 600 }}> · office changed {off.join(" & ")}</span> : null}
+                      </div>
+                    )}
+                    {snap && off.length > 0 && canEdit && (
+                      <input className="no-print js-variance-reason" aria-label={`Why ${e.description} differs from the guide's report`}
+                        placeholder="Why it differs from the guide (required)" maxLength={500}
+                        value={(e as SnapshotRow).guideVarianceReason ?? ""}
+                        onChange={(ev) => setExpense(i, { guideVarianceReason: ev.target.value } as Partial<Expense>)}
+                        style={{ ...L, marginTop: 3, fontSize: 12, borderColor: ((e as SnapshotRow).guideVarianceReason ?? "").trim() ? undefined : "#b45309" }} />
+                    )}
+                  </>) : <>
                     <input style={L} value={e.description} onChange={(ev) => setExpense(i, { description: ev.target.value })} />
                     {/* Owner 2026-11-16: a cost the guide paid is Water / Bus / Ferry (Inc. Guide) here too —
                         the server refuses anything else (lib/guide-fixed-expenses operatorRowProblems). */}
@@ -1883,7 +1899,13 @@ export default function JobSheetEditor() {
             <span className="no-print" style={{ display: "inline-flex", alignItems: "center", gap: 8, marginLeft: 10, flexWrap: "wrap" }}>
               <span style={{ fontSize: 12, color: "var(--ink-soft,#888)" }}>Fill down pax:</span>
               <input type="number" min={0} value={fillPax} placeholder={String(guestTotal || "")} onChange={(e) => setFillPax(e.target.value)} style={{ ...L, width: 72 }} title="Guest count to apply to every expense line (Inc. Guide +1)" />
-              <button className="btn sm" title="Set every expense line's pax from this guest count" onClick={() => { const p = fillPax.trim() === "" ? guestTotal : Math.max(0, Math.floor(Number(fillPax) || 0)); up({ expenses: fillDownExpensePax(sheet.expenses, p) }); }}>Fill down</button>
+              <button className="btn sm" title="Set every expense line's pax from this guest count" onClick={() => {
+                const p = fillPax.trim() === "" ? guestTotal : Math.max(0, Math.floor(Number(fillPax) || 0));
+                // Water / Bus / Ferry the guide reported keep their Qty — actual usage, not the guest count.
+                const r = fillDownKeepingReported(sheet.expenses as SnapshotRow[], p);
+                up({ expenses: r.rows as Expense[] });
+                setMsg(r.skipped.length ? `Filled down to ${p}. Skipped ${r.skipped.length} row${r.skipped.length === 1 ? "" : "s"} the guide reported: ${r.skipped.join(", ")} — their Qty is actual usage.` : `Filled down to ${p}.`);
+              }}>Fill down</button>
             </span>
           );
         })()}

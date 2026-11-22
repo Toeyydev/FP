@@ -35,8 +35,8 @@ export async function POST(req: Request) {
     }));
   } catch (e) {
     // A guide's line that is not Water / Bus / Ferry (lib/guide-fixed-expenses): refused, nothing stored.
-    const r = e as { refused?: boolean; reasons?: string[] };
-    if (r?.refused) return NextResponse.json({ error: "not-allowed", reasons: r.reasons ?? [], detail: (r.reasons ?? []).join("\n") }, { status: 400 });
+    const r = e as { refused?: boolean; status?: number; reasons?: string[] };
+    if (r?.refused) return NextResponse.json({ error: r.status === 409 ? "busy" : "not-allowed", reasons: r.reasons ?? [], detail: (r.reasons ?? []).join("\n") }, { status: r.status === 409 ? 409 : 400 });
     throw e;
   }
 }
