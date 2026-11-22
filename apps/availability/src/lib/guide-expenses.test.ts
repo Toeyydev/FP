@@ -9,6 +9,7 @@ const prismaMock = vi.hoisted(() => ({
   checkin: { findFirst: vi.fn() },
   guideAdvance: { count: vi.fn() },
   jobOffer: { findFirst: vi.fn() },
+  tourPayment: { findUnique: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({ prisma: prismaMock }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
@@ -42,10 +43,11 @@ beforeEach(() => {
   prismaMock.checkin.findFirst.mockResolvedValue(null);
   prismaMock.guideAdvance.count.mockResolvedValue(0);
   prismaMock.jobOffer.findFirst.mockResolvedValue(null);
+  prismaMock.tourPayment.findUnique.mockResolvedValue(null);
 });
 
 describe("submitGuideExpenses", () => {
-  it("stores the report beside the operator's set, never over it", async () => {
+  it("stores the report, and puts the guide's Water / Bus / Ferry straight onto the job's rows", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     expect(await report({ note: "  paid cash  " })).toEqual({ ok: true, driveLink: "https://drive.example.test/sheet" });
 
@@ -56,8 +58,20 @@ describe("submitGuideExpenses", () => {
     expect(data.guideExpenses).toEqual([{ description: "Water (Inc. Guide)", expenseType: "meal", price: 10, pax: 4, paidBy: "guide", paidBySource: "unconfirmed" }]);
     expect(data.guideExpensesNote).toBe("paid cash");
     expect(data.guideExpensesAt).toBeInstanceOf(Date);
-    // The operator's own `expenses` are not among the fields written.
-    expect(data).not.toHaveProperty("expenses");
+    // Owner 2026-11-22: no review step — the job's row takes the guide's price × qty, paid by the guide.
+    // The payer is the one the report carries (here: sent, not confirmed) — decided by the payer rules, not here.
+    expect(data.expenses).toEqual([expect.objectContaining({ description: "Water (Inc. Guide)", expenseType: "meal", price: 10, pax: 4, paidBy: "guide", paidBySource: "unconfirmed" })]);
+  });
+
+  it("leaves the job's rows alone once the job sheet is approved or paid", async () => {
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [], expenses: [], approvalStatus: "APPROVED" });
+    await report();
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data).not.toHaveProperty("expenses");
+    prismaMock.jobSheet.update.mockClear();
+    prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [], expenses: [] });
+    prismaMock.tourPayment.findUnique.mockResolvedValue({ status: "PAID" });
+    await report();
+    expect(prismaMock.jobSheet.update.mock.calls[0][0].data).not.toHaveProperty("expenses");
   });
 
   it("never stores a review reward in the guide's report — it is the operator's to record", async () => {
@@ -318,7 +332,14 @@ describe("Paid By on a report the guide files after the tour", () => {
     expect(created.guideExpenses[0]).toMatchObject({ paidBy: "guide", paidBySource: "category-default" });   // transport
     expect(created.guideExpenses[1].paidBy).toBeUndefined();                                                   // a meal waits for a person
     expect(created.guideExpenses[2]).toMatchObject({ paidBy: "company", paidBySource: "unconfirmed" }); // no operator record to match yet
-    expect(created.expenses.every((e: { paidBy?: string }) => e.paidBy === undefined)).toBe(true);   // the operator's set is untouched
+    // Owner 2026-11-22: the scaffolded sheet's Water / Bus / Ferry take the guide's figures, each with
+    // the payer the report carries — the payer rules above still decide it.
+    const fixed = created.expenses.filter((e: { description: string }) => /\(Inc\. Guide\)/.test(e.description));
+    for (const g of created.guideExpenses) {
+      const o = fixed.find((e: { description: string }) => e.description === g.description);
+      expect(o).toMatchObject({ price: g.price, pax: g.pax });
+      expect(o.paidBy).toBe(g.paidBy);
+    }
   });
 });
 

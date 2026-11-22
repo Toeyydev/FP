@@ -1,27 +1,25 @@
 "use client";
 
-// The operator's review panels on the job sheet (owner 2026-11-15; lib/job-expense-review):
-//   Tour expenses — the guide's three fixed items: reported, receipt, PEAK account (read-only, from
-//   the mapping), verified amount, status, Approve / Reject with a reason, history.
+// The operator's review panel on the job sheet (owner 2026-11-15; lib/job-expense-review):
 //   Company ADV — Entrance tickets — the advance (number, job, guide, amount, date, transfer,
 //   guide's confirmation, PEAK journal, settlement) and each ticket row's receipts: Verify,
 //   Reject, Ask for a new one, internal note. Verifying never settles the advance.
-// The job's full accounting rows stay below, unchanged.
+// The job's full accounting rows stay below, unchanged. The "Tour expenses · guide report" panel
+// (Water / Bus / Ferry approve-reject) was removed from the job sheet (owner, 22 Nov 2026): the
+// guide's three fixed items are compared with the job's rows in the guide-report comparison below.
 
 import { useState } from "react";
 import { expenseAmount, thb, type Expense } from "@/lib/jobsheet";
-import { FIXED_ITEMS, fixedItemOf, isAdvanceRow, receiptRowStatus, reviewOf, type ReportRow } from "@/lib/guide-fixed-expenses";
+import { isAdvanceRow, receiptRowStatus } from "@/lib/guide-fixed-expenses";
 import type { AttachmentView } from "@/components/ReceiptFiles";
 
-type Account = { code: string | null; name: string | null } | null;
 type History = { at: string; action: string; by: string; detail: Record<string, unknown> };
 type AdvRow = { id: string; advanceNo: string; amount: number; advanceDate?: string; method: string; status: string | null; acknowledgedAt?: string | Date | null; peakSync?: { status: string; documentNo: string | null } | null };
 type Props = {
   sheetKey: { guideId: string; date: string; slotIdx: number };
   jobRef: string | null; guideLabel: string;
-  reported: ReportRow[]; official: Expense[];
+  official: Expense[];
   attachments: Record<string, AttachmentView[]>;
-  accounts: Record<string, Account> | undefined;
   history: History[] | undefined;
   advances: AdvRow[]; settlement: string;
   locked: boolean;
@@ -29,7 +27,7 @@ type Props = {
 };
 
 const chip = (bg: string, line: string, fg: string): React.CSSProperties => ({ fontSize: 12, fontWeight: 700, color: fg, background: bg, border: `1px solid ${line}`, borderRadius: 999, padding: "2px 9px", whiteSpace: "nowrap", display: "inline-block" });
-const OK = chip("var(--green-bg)", "var(--green-line)", "var(--green)"), WARN = chip("var(--assign-bg)", "var(--assign-line)", "var(--assign)"),
+const OK = chip("var(--green-bg)", "var(--green-line)", "var(--green)"),
   BAD = chip("var(--danger-bg)", "var(--danger-line)", "var(--danger)"), GREY = chip("var(--grey-bg)", "var(--line)", "var(--ink-soft)");
 const SYNC: Record<string, string> = { PENDING: "Not synced", SENDING: "Syncing", POSTED: "Synced", BLOCKED: "Failed", UNCERTAIN: "Reconciliation required", CANCELLED: "Cancelled" };
 const SETTLE: Record<string, string> = { OPEN: "Open", IN_USE: "In use", RETURN_DUE: "Return due", SETTLED: "Settled", NEEDS_REVIEW: "Needs review", NO_ADVANCE: "—" };
@@ -48,7 +46,6 @@ async function post(url: string, body: unknown): Promise<string | null> {
 }
 
 export default function OperatorExpenseReview(p: Props) {
-  const [edit, setEdit] = useState<Record<string, { verified: string; reason: string; open: boolean }>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState<Record<string, string>>({});
@@ -58,16 +55,6 @@ export default function OperatorExpenseReview(p: Props) {
   const liveAdv = p.advances.filter((a) => a.status !== "VOID");
   const hist = (pred: (h: History) => boolean) => (p.history ?? []).filter(pred);
 
-  async function review(key: string, action: "APPROVE" | "REJECT", reported: number) {
-    const e = edit[key] ?? { verified: String(reported), reason: "", open: true };
-    setBusy(key); setErr((x) => ({ ...x, [key]: "" }));
-    const v = e.verified.trim() === "" ? reported : Number(e.verified);
-    const msg = await post("/api/jobsheet/expense-review", { ...p.sheetKey, item: key, action, ...(action === "APPROVE" ? { verifiedAmount: v } : {}), reason: e.reason.trim() || undefined });
-    setBusy("");
-    if (msg) { setErr((x) => ({ ...x, [key]: msg })); return; }
-    setEdit((x) => ({ ...x, [key]: { ...e, open: false } }));
-    await p.onChanged(action === "REJECT" ? "Rejected — the guide sees your reason" : "Reviewed ✓ — the accounting row now carries the verified amount");
-  }
   async function receipt(rowId: string, action: "VERIFY" | "REJECT" | "REQUEST_NEW" | "NOTE") {
     setBusy(rowId + action); setErr((x) => ({ ...x, [rowId]: "" }));
     const msg = await post("/api/jobsheet/receipt-review", { ...p.sheetKey, rowId, action, note: (notes[rowId] ?? "").trim() || undefined });
@@ -79,75 +66,6 @@ export default function OperatorExpenseReview(p: Props) {
 
   return (
     <div className="no-print js-operator-review">
-      <section className="js-review-expenses" style={box}>
-        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-          <h3 style={{ margin: 0 }}>Tour expenses <small style={{ fontWeight: 500, color: "var(--ink-soft)" }}>ค่าใช้จ่ายระหว่างทัวร์ · guide report</small></h3>
-          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>🔒 Fixed items · PEAK accounts from the account mapping</span>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 13.5 }}>
-            <thead><tr><th style={th}>Item</th><th style={th}>PEAK account</th><th style={{ ...th, textAlign: "right" }}>Reported</th><th style={th}>Receipt</th><th style={{ ...th, textAlign: "right" }}>Verified</th><th style={th}>Status</th><th style={th} /></tr></thead>
-            <tbody>
-              {FIXED_ITEMS.map((f) => {
-                const mine = p.reported.find((r) => fixedItemOf(r)?.key === f.key && expenseAmount(r) > 0);
-                const off = p.official.find((r) => fixedItemOf(r)?.key === f.key);
-                const files = (off?.rowId && p.attachments[off.rowId]) || [];
-                const st = reviewOf(mine);
-                const reported = mine ? expenseAmount(mine) : 0;
-                const acct = p.accounts?.[f.key];
-                const e = edit[f.key];
-                const open = !!mine && !p.locked && (st === "PENDING" || e?.open);
-                const vText = e?.verified ?? String(mine?.verifiedAmount ?? reported);
-                const differs = open && Number(vText || reported) !== reported;
-                return (
-                  <tr key={f.key} className="js-review-row" data-item={f.key} data-status={st ?? "NONE"}>
-                    <td style={{ ...td, fontWeight: 600 }}>{f.label} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(Inc. Guide)</span></td>
-                    <td style={{ ...td, fontSize: 12.5, color: acct ? "var(--ink-soft)" : "var(--danger)" }}>{acct ? `${acct.code} ${acct.name ?? ""}` : "Not mapped — Admin/Accountant to set"}</td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{mine ? <>{thb(reported)}<div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{mine.price ?? 0} × {mine.pax ?? 0}</div></> : <span style={{ color: "var(--ink-soft)" }}>Not reported</span>}</td>
-                    <td style={td}>{files.length ? files.map((x, k) => <a key={x.id} href={x.link ?? undefined} target="_blank" rel="noopener noreferrer" style={{ display: "block", fontSize: 12.5 }}>File {k + 1}</a>) : <span style={{ color: "var(--ink-soft)" }}>None</span>}</td>
-                    <td style={{ ...td, textAlign: "right" }}>
-                      {open ? <input aria-label={`${f.label} verified amount`} className="js-review-verified" type="number" min={0} inputMode="decimal" value={vText}
-                        onChange={(ev) => setEdit((x) => ({ ...x, [f.key]: { verified: ev.target.value, reason: x[f.key]?.reason ?? "", open: true } }))}
-                        style={{ width: 92, border: "1px solid var(--line-strong, var(--line))", borderRadius: 8, padding: "6px 8px", textAlign: "right", fontSize: 13.5, fontFamily: "inherit" }} />
-                        : mine && st !== "PENDING" ? <b>{thb(mine.verifiedAmount ?? 0)}</b> : ""}
-                    </td>
-                    <td style={td}>
-                      {st ? <span className="js-review-status" style={st === "APPROVED" ? OK : st === "ADJUSTED" ? WARN : st === "REJECTED" ? BAD : GREY}>{st === "APPROVED" ? "✓ Approved" : st === "ADJUSTED" ? "Adjusted" : st === "REJECTED" ? "Rejected" : "To review"}</span> : <span style={GREY}>—</span>}
-                      {mine?.reviewReason && st !== "PENDING" && <div style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 4 }}>“{mine.reviewReason}”</div>}
-                    </td>
-                    <td style={td}>
-                      {open ? (
-                        <div style={{ display: "grid", gap: 6, minWidth: 210 }}>
-                          <input aria-label={`${f.label} reason`} className="js-review-reason" placeholder={differs ? "Why the amount differs (required)" : "Reason (required to reject)"} maxLength={500}
-                            value={e?.reason ?? ""} onChange={(ev) => setEdit((x) => ({ ...x, [f.key]: { verified: x[f.key]?.verified ?? vText, reason: ev.target.value, open: true } }))}
-                            style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "6px 8px", fontSize: 13, fontFamily: "inherit" }} />
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <button type="button" className="btn sm primary js-review-approve" disabled={busy === f.key} onClick={() => review(f.key, "APPROVE", reported)}>Approve</button>
-                            <button type="button" className="btn sm js-review-reject" disabled={busy === f.key} onClick={() => review(f.key, "REJECT", reported)} style={{ color: "var(--danger)" }}>Reject</button>
-                          </div>
-                        </div>
-                      ) : mine && !p.locked && st !== "PENDING" ? <button type="button" className="btn sm ghost js-review-change" onClick={() => setEdit((x) => ({ ...x, [f.key]: { verified: String(mine.verifiedAmount ?? reported), reason: "", open: true } }))}>Change</button> : null}
-                      {hist((h) => h.action === "expense.review" && h.detail.item === f.key).length > 0 && (
-                        <button type="button" className="btn sm ghost js-review-history" onClick={() => setShowHist(showHist === f.key ? null : f.key)}>History</button>
-                      )}
-                      {showHist === f.key && (
-                        <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12 }}>
-                          {hist((h) => h.action === "expense.review" && h.detail.item === f.key).map((h, k) => (
-                            <li key={k}>{dt(h.at)} · {h.by} · {String(h.detail.status).toLowerCase()} {thb(Number(h.detail.verified) || 0)} of {thb(Number(h.detail.reported) || 0)}{h.detail.reason ? ` — “${String(h.detail.reason)}”` : ""}</li>
-                          ))}
-                        </ol>
-                      )}
-                      {err[f.key] && <div role="alert" style={{ color: "var(--danger)", fontSize: 12, whiteSpace: "pre-line", marginTop: 4 }}>{err[f.key]}</div>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>{p.locked ? "The job sheet is approved — the review is closed." : "An amount that differs from the guide's needs a reason. An approved amount goes into the job's accounting row; nothing reaches PEAK before the job sheet is approved."}</div>
-      </section>
-
       {(liveAdv.length > 0 || advRows.length > 0) && (
         <section className="js-review-adv" style={box}>
           <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>

@@ -159,7 +159,6 @@ export default function JobSheetEditor() {
   // Row id → the files behind that expense row (lib/expense-attachments).
   const [attachments, setAttachments] = useState<Record<string, AttachmentView[]>>({});
   // Operator review (owner 2026-11-15): each fixed item's PEAK account and the review history.
-  const [expenseAccounts, setExpenseAccounts] = useState<Record<string, { code: string | null; name: string | null } | null> | undefined>(undefined);
   const [reviewHist, setReviewHist] = useState<{ at: string; action: string; by: string; detail: Record<string, unknown> }[]>([]);
   const [moveOpen, setMoveOpen] = useState(false); // Move departure (components/MoveDepartureDialog)
   // The booking reconciliation's last change to the EXPECTED guest count (never attendance).
@@ -263,7 +262,7 @@ export default function JobSheetEditor() {
     // The guide reports what they paid on tour — never the review reward (the operator's to record).
     setGuideExp((s?.guideExpenses && s.guideExpenses.length ? s.guideExpenses : (s?.expenses ?? [])).filter((e: Expense) => !isReviewExpense(e)).map((e: Expense) => ({ ...e })));
     setGuideNote(s?.guideExpensesNote ?? "");
-    setExpenseAccounts(d.expenseAccounts ?? undefined); setReviewHist(Array.isArray(d.reviewHistory) ? d.reviewHistory : []);
+    setReviewHist(Array.isArray(d.reviewHistory) ? d.reviewHistory : []);
   }, [guideId, date, slotIdx]);
   useEffect(() => { if (guideId && date && slotIdx >= 0) load(); }, [load, guideId, date, slotIdx]);
   // Other Tour Cost may have a standing default (set under PEAK sync), but a row
@@ -1535,11 +1534,10 @@ export default function JobSheetEditor() {
             the CATEGORY (lib/jobsheet), never the description. */}
         <div id="js-expenses" style={{ display: secTab === "all" || secTab === "expenses" ? undefined : "none" }}>
         {canEdit && (
-          // Owner 2026-11-15: review the guide's three fixed items and the Company ADV ticket receipts
-          // here; the accounting rows below stay the job's record (lib/job-expense-review).
+          // The Company ADV ticket receipts are reviewed here; the accounting rows below stay the job's
+          // record (lib/job-expense-review). The guide's Water / Bus / Ferry are compared below.
           <OperatorExpenseReview sheetKey={sheet} jobRef={sheet.ref ?? null} guideLabel={header?.name ? `${sheet.guideId} ${header.name}` : sheet.guideId}
-            reported={(sheet.guideExpenses ?? []) as ReportRow[]} official={sheet.expenses} attachments={attachments}
-            accounts={expenseAccounts} history={reviewHist}
+            official={sheet.expenses} attachments={attachments} history={reviewHist}
             advances={advance.advances as never} settlement={advance.status}
             locked={isApproved((sheet as { approvalStatus?: string | null }).approvalStatus) || !!payment?.paid}
             onChanged={async (m) => { await load(); setMsg(m); }} />

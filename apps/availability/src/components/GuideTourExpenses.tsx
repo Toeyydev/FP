@@ -72,7 +72,9 @@ export default function GuideTourExpenses({ sheetKey, reported, official, defaul
               <input aria-label={`${f.label} quantity`} className="js-fixed-qty" type="number" inputMode="numeric" min={0} style={L} value={rows[i].qty} onChange={(e) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, qty: e.target.value } : r)))} />
               <b style={{ textAlign: "right", fontSize: 14, fontVariantNumeric: "tabular-nums" }}>{thb(amount(i))}</b>
             </div>
-            {st && (
+            {/* Only a real verdict (from before 22 Nov 2026, when the operator review panel left the
+                job sheet): a new report shows no "Waiting for review" that nobody would answer. */}
+            {st && st !== "PENDING" && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "flex-end" }}>
                 <span className="js-fixed-status" data-status={st} style={
                   st === "APPROVED" ? chip("var(--green-bg)", "var(--green-line)", "var(--green)")

@@ -1,9 +1,10 @@
 // Guide and operator job sheet expenses together, in a real browser (owner 2026-11-15):
 //   GUIDE (390 px): Tour expenses are exactly Water / Bus / Ferry (no add, no rename); a ticket
 //     line is refused by the server; Company ADV ticket rows are not tour expenses — they sit
-//     under Ticket receipts, upload-only; the operator's verdicts show back on each line.
-//   OPERATOR: Tour expenses review — Approve, Approve another amount (reason), Reject (reason);
-//     the accounting row carries the verified amount, one row per item. Company ADV — Entrance
+//     under Ticket receipts, upload-only; no "Waiting for review" chip on a new report; the
+//     three figures go straight onto the job sheet's rows (owner, 22 Nov 2026).
+//   OPERATOR: no "Tour expenses · guide report" review panel on the job sheet (owner, 22 Nov
+//     2026) — the guide's three items are compared below the job's rows. Company ADV — Entrance
 //     tickets: the advance summary and Verify / Ask for a new receipt; verifying never settles.
 //   A guide cannot call either review. No page scrolls sideways at 390 px.
 // Run after `next build`:  node scripts/e2e/expense-review.mjs   All data invented.
@@ -145,10 +146,18 @@ try {
       await setVal(page, `input[aria-label="${k} quantity"]`, qty);
     }
     await tap(page, ".js-fixed-submit");
-    await page.waitForFunction(() => document.querySelectorAll(".js-fixed-status").length === 3, { timeout: 10000 }).catch(() => {});
+    await pause(1500);
     const stored = (await sheetRow()).guideExpenses;
     check("guide: submitting stores the three items under their fixed names", JSON.stringify(stored.map((r) => [r.description, r.price, r.pax])) === JSON.stringify([["Water (Inc. Guide)", 10, 6], ["Bus (Inc. Guide)", 15, 6], ["Ferry (Inc. Guide)", 8, 6]]), JSON.stringify(stored));
-    check("guide: each line now says Waiting for review", (await page.$$eval(".js-fixed-status", (xs) => xs.map((x) => x.textContent))).every((t) => /Waiting for review/.test(t)));
+    {
+      const rowsNow = (await sheetRow()).expenses;
+      const fig = (d) => byDesc(rowsNow, d).map((e) => `${e.price}x${e.pax}`).join(",");
+      check("guide: the three figures go straight onto the job sheet rows (no review step)",
+        fig("Water (Inc. Guide)") === "10x6" && fig("Bus (Inc. Guide)") === "15x6" && fig("Ferry (Inc. Guide)") === "8x6"
+          && byDesc(rowsNow, "Grand Palace").length === 1 && byDesc(rowsNow, "Grand Palace")[0].price === 500,
+        JSON.stringify(rowsNow.map((e) => [e.description, e.price, e.pax, e.paidBy])));
+    }
+    check("guide: no \"Waiting for review\" chip that nobody would answer", (await page.$$(".js-fixed-status")).length === 0 && !(await page.evaluate(() => /Waiting for review/.test(document.body.innerText))));
     check("guide: no sideways scroll at 390 px", (await noSideways(page)) <= 0);
     if (SHOTS) await page.screenshot({ path: join(SHOTS, "expense-review-guide-390.png"), fullPage: true });
     check("guide: no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
@@ -166,29 +175,8 @@ try {
   // ── OPERATOR ─────────────────────────────────────────────────────────────────────────────
   {
     const { page, errors } = await open(data.op, 1280);
-    const st = () => page.$$eval(".js-review-row", (xs) => xs.map((x) => `${x.getAttribute("data-item")}:${x.getAttribute("data-status")}`));
     check("operator: the old whole-report \"Accept guide's figures\" is not offered for a fixed-item report", !(await page.evaluate(() => /Accept guide.s figures/.test(document.body.innerText))));
-    check("operator: the three items wait for review", JSON.stringify(await st()) === JSON.stringify(["WATER:PENDING", "BUS:PENDING", "FERRY:PENDING"]), JSON.stringify(await st()));
-
-    await tap(page, '.js-review-row[data-item="WATER"] .js-review-approve');
-    await page.waitForFunction(() => document.querySelector('.js-review-row[data-item="WATER"]')?.getAttribute("data-status") === "APPROVED", { timeout: 10000 }).catch(() => {});
-    await setVal(page, '.js-review-row[data-item="BUS"] .js-review-verified', "60");
-    await setVal(page, '.js-review-row[data-item="BUS"] .js-review-reason', "One leg by boat, 4 fares");
-    await tap(page, '.js-review-row[data-item="BUS"] .js-review-approve');
-    await page.waitForFunction(() => document.querySelector('.js-review-row[data-item="BUS"]')?.getAttribute("data-status") === "ADJUSTED", { timeout: 10000 }).catch(() => {});
-    await tap(page, '.js-review-row[data-item="FERRY"] .js-review-reject');
-    await page.waitForSelector('.js-review-row[data-item="FERRY"] [role=alert]', { timeout: 8000 }).catch(() => {});
-    const needReason = await page.$eval('.js-review-row[data-item="FERRY"] [role=alert]', (x) => x.textContent).catch(() => "");
-    check("operator: Reject without a reason is refused, saying why", /reason|why/i.test(needReason), needReason);
-    await setVal(page, '.js-review-row[data-item="FERRY"] .js-review-reason', "No ferry on this route");
-    await tap(page, '.js-review-row[data-item="FERRY"] .js-review-reject');
-    await page.waitForFunction(() => document.querySelector('.js-review-row[data-item="FERRY"]')?.getAttribute("data-status") === "REJECTED", { timeout: 10000 }).catch(() => {});
-    check("operator: Approved / Adjusted / Rejected", JSON.stringify(await st()) === JSON.stringify(["WATER:APPROVED", "BUS:ADJUSTED", "FERRY:REJECTED"]), JSON.stringify(await st()));
-    const s = await sheetRow();
-    check("operator: the accounting rows carry the verified amounts, one per item",
-      byDesc(s.expenses, "Water (Inc. Guide)").length === 1 && byDesc(s.expenses, "Water (Inc. Guide)")[0].pax === 6
-      && byDesc(s.expenses, "Bus (Inc. Guide)").length === 1 && byDesc(s.expenses, "Bus (Inc. Guide)")[0].price * byDesc(s.expenses, "Bus (Inc. Guide)")[0].pax === 60
-      && byDesc(s.expenses, "Ferry (Inc. Guide)").length === 0, JSON.stringify(s.expenses.map((e) => [e.description, e.price, e.pax])));
+    check("operator: no \"Tour expenses · guide report\" review panel on the job sheet", !(await page.$(".js-review-expenses")) && (await page.$$(".js-review-row")).length === 0 && !(await page.evaluate(() => /Fixed items · PEAK accounts/.test(document.body.innerText))));
 
     const adv = await page.$eval(".js-review-adv", (x) => x.innerText).catch(() => "");
     check("operator: the Company ADV panel shows the advance, the transfer and settlement", /FOLK-ADV-202601-001/.test(adv) && /฿4,000\.00/.test(adv) && /✓ Transferred/.test(adv) && /Settlement/.test(adv) && /Not tour expenses/.test(adv), adv.slice(0, 200));
@@ -215,9 +203,6 @@ try {
   // ── GUIDE sees the verdicts ───────────────────────────────────────────────────────────────
   {
     const { page } = await open(data.guide, 390);
-    const s = await page.$$eval(".js-fixed-item", (xs) => xs.map((x) => x.innerText.replace(/\s+/g, " ")));
-    check("guide: sees ✓ Verified, Adjusted to ฿60.00 with the reason, and Rejected with the reason",
-      /✓ Verified/.test(s[0]) && /Adjusted to ฿60\.00/.test(s[1]) && /4 fares/.test(s[1]) && /Rejected/.test(s[2]) && /No ferry on this route/.test(s[2]), JSON.stringify(s));
     const tickets = await page.$$eval(".js-ticket-row", (xs) => xs.map((x) => x.getAttribute("data-status")));
     check("guide: the Grand Palace receipt shows Verified", tickets[0] === "VERIFIED", JSON.stringify(tickets));
     if (SHOTS) await page.screenshot({ path: join(SHOTS, "expense-review-guide-after-390.png"), fullPage: true });
