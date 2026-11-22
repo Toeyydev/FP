@@ -409,7 +409,7 @@ describe("the Admin returns or confirms a submission", () => {
     await confirmHandIn(prisma, admin, { settlementId: s.settlement.id, submissionNo: 1, transferIds: [a.id, b.id, c.id] });
     const clearings = await prisma.upsellPeakEvent.findMany({ where: { eventKind: "BANK_CLEARING" }, include: { bankLinks: true }, orderBy: { eventDate: "asc" } });
     const shape = clearings.map((e) => [e.eventDate, (e.payload as { receivingAccountKey: string }).receivingAccountKey, (e.payload as { totalSatang: number }).totalSatang, e.bankLinks.length]).sort();
-    expect(shape).toEqual([[a.transferDate, "ACC:999007890", 50000, 1], [TODAY, "ACC:999001234", 20000, 1], [TODAY, "ACC:999007890", 10000, 1]].sort());
+    expect(shape).toEqual([[a.transferDate, "ACC:999007890", 50000, 1], [c.transferDate, "ACC:999001234", 20000, 1], [b.transferDate, "ACC:999007890", 10000, 1]].sort());
     for (const e of clearings) expect(e.blockedReasons.join(" ")).not.toMatch(/different receiving accounts/);
     expect(new Set(clearings.flatMap((e) => e.bankLinks.map((l) => l.bankTransactionId))).size).toBe(3); // each transfer cleared once
   });
