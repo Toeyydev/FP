@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
         where,
         orderBy: [{ date: "desc" }, { createdAt: "desc" }],
         take: 1000,
-        select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true, createdAt: true },
+        select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true, createdAt: true, assignedGuideId: true },
       }),
       prisma.tour.findMany({ orderBy: { id: "asc" }, select: { id: true, name: true, time: true } }),
       // The sources actually stored ("GetYourGuide", "Viator.com", …) — the filter must
@@ -88,9 +88,13 @@ export async function GET(req: NextRequest) {
     const guideIds = [...new Set(assigns.map((a) => a.guideId))];
     const guideUsers = guideIds.length ? await prisma.user.findMany({ where: { guideId: { in: guideIds } }, select: { guideId: true, displayName: true } }) : [];
     const gName = new Map(guideUsers.map((g) => [g.guideId, g.displayName]));
-    const aMap = new Map(assigns.map((a) => [`${a.date}|${a.slotIdx}`, a.guideId]));
+    const aMap = new Map<string, string[]>();
+    for (const a of assigns) { const k = `${a.date}|${a.slotIdx}`; aMap.set(k, [...(aMap.get(k) ?? []), a.guideId]); }
+    // The booking's own guide; with one guide on the slot, that guide. With several and no
+    // tag, nobody's yet (owner, 22 Nov 2026) — not whichever guide happened to come last.
     const withGuide = bookings.map((b) => {
-      const gid = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) : undefined;
+      const at = b.date && b.slotIdx != null ? aMap.get(`${b.date}|${b.slotIdx}`) ?? [] : [];
+      const gid = b.assignedGuideId && at.includes(b.assignedGuideId) ? b.assignedGuideId : at.length === 1 ? at[0] : undefined;
       return { ...b, guideId: gid ?? null, guide: gid ? (gName.get(gid) ?? gid) : null };
     });
     return NextResponse.json({ bookings: withGuide, tours, sources: sourceRows.map((r) => r.source).filter(Boolean) });
@@ -118,14 +122,14 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ date: "asc" }, { slotIdx: "asc" }, { createdAt: "asc" }],
       take: 500,
-      select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true },
+      select: { id: true, source: true, confirmationCode: true, externalRef: true, productName: true, tourId: true, date: true, startTime: true, slotIdx: true, pax: true, customerName: true, status: true, assignedGuideId: true },
     }),
     prisma.tour.findMany({ orderBy: { id: "asc" } }),
   ]);
   // Attach the assigned guide (if the slot is already dispatched) so the inbox can
   // badge those groups as handled instead of offering them again.
   const aDates = [...new Set(bookings.filter((b) => b.date && b.slotIdx != null).map((b) => b.date!))];
-  const aRows = aDates.length ? await prisma.assignment.findMany({ where: { date: { in: aDates } }, select: { date: true, slotIdx: true, guideId: true, tourId: true }, orderBy: { guideId: "asc" } }) : [];
+  const aRows = aDates.length ? await prisma.assignment.findMany({ where: { date: { in: aDates } }, select: { date: true, slotIdx: true, guideId: true, tourId: true, pax: true }, orderBy: { guideId: "asc" } }) : [];
   const aGuideIds = [...new Set(aRows.map((a) => a.guideId))];
   const aUsers = aGuideIds.length ? await prisma.user.findMany({ where: { guideId: { in: aGuideIds } }, select: { guideId: true, displayName: true } }) : [];
   const aName = new Map(aUsers.map((g) => [g.guideId, g.displayName]));
@@ -134,12 +138,22 @@ export async function GET(req: NextRequest) {
   // The guide of THIS booking's tour at its time. A guide on another tour at the same time
   // is not this booking's guide — it is named separately (otherTourGuide), so the inbox does
   // not badge the booking as handled (a GYG booking filed under the wrong tour, 27 Oct 2026).
-  const guideOf = (b: { date: string | null; slotIdx: number | null; tourId: string | null }) => {
+  //
+  // Several guides on this tour (owner, 22 Nov 2026): a booking tagged to none of them is
+  // nobody's yet — never badged with the first guide's name. It comes back as needsGuide, the
+  // guides with their current pax, so an operator gives it to one to balance the groups.
+  const guideOf = (b: { date: string | null; slotIdx: number | null; tourId: string | null; assignedGuideId: string | null }) => {
     const at = b.date && b.slotIdx != null ? aBySlot.get(`${b.date}|${b.slotIdx}`) ?? [] : [];
-    const mine = at.find((a) => !b.tourId || a.tourId === b.tourId);
-    const other = mine ? undefined : at[0];
+    const onTour = at.filter((a) => !b.tourId || a.tourId === b.tourId);
+    const tagged = b.assignedGuideId ? onTour.find((a) => a.guideId === b.assignedGuideId) : undefined;
+    const mine = tagged ?? (onTour.length === 1 ? onTour[0] : undefined);
+    const needsGuide = !mine && onTour.length > 1
+      ? onTour.map((a) => ({ guideId: a.guideId, guide: aName.get(a.guideId) ?? a.guideId, pax: a.pax ?? 0 }))
+      : null;
+    const other = mine || needsGuide ? undefined : at[0];
     return {
       guideId: mine?.guideId ?? null, guide: mine ? (aName.get(mine.guideId) ?? mine.guideId) : null,
+      needsGuide,
       otherTourGuide: other ? { guideId: other.guideId, guide: aName.get(other.guideId) ?? other.guideId, tourId: other.tourId } : null,
     };
   };

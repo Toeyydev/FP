@@ -1,6 +1,8 @@
-// The Split dialog's "New bookings go to" in a real browser, against a real server and
-// database: an operator names the guide who takes later bookings, it is saved on that
-// guide's assignment and shown again when the dialog reopens; desktop and 390px.
+// A tour two guides share, in a real browser against a real server and database (owner,
+// 22 Nov 2026): the Split dialog no longer offers "New bookings go to" — a booking that
+// arrives later waits for an operator. On Bookings its card says it needs a guide (never the
+// first guide's name) and offers each guide with their pax; "Give to" puts it on that guide's
+// job sheet only. Desktop and 390px. The /jobs?split= deep link still opens the dialog.
 // Run after `next build`:  node scripts/e2e/split-new-bookings.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates). All data invented — this repo is public.
 
@@ -40,6 +42,7 @@ function browserPath() {
 }
 
 const TODAY = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+const TOMORROW = new Date(Date.now() + 31 * 3600 * 1000).toISOString().slice(0, 10);
 async function seed() {
   const tables = ["AuditLog", "Notification", "Booking", "Assignment", "Checkin", "JobSheet", "RefreshToken", "User", "Tour"];
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tables.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
@@ -53,6 +56,14 @@ async function seed() {
     await prisma.assignment.create({ data: { guideId: g, date: TODAY, slotIdx: 2, tourId: "T-900", pax } });
     await prisma.booking.create({ data: { source: "manual", tourId: "T-900", date: TODAY, slotIdx: 2, pax, customerName: `Guest ${ref}`, externalRef: ref, status: "OFFERED", assignedGuideId: g } });
   }
+  // Tomorrow 13:30: Fon 3, Mai 6, and a booking nobody has yet.
+  for (const [g, ref, pax] of [["G-981", "E2E-TM-1", 3], ["G-982", "E2E-TM-2", 6]]) {
+    await prisma.assignment.create({ data: { guideId: g, date: TOMORROW, slotIdx: 2, tourId: "T-900", pax } });
+    const b = await prisma.booking.create({ data: { source: "GetYourGuide", tourId: "T-900", date: TOMORROW, slotIdx: 2, pax, customerName: `Guest ${ref}`, externalRef: ref, status: "OFFERED", assignedGuideId: g } });
+    await prisma.jobSheet.create({ data: { ref: `FOLK-TEST-TM-${g}`, guideId: g, date: TOMORROW, slotIdx: 2, tourId: "T-900", status: "Confirmed", expenses: [],
+      bookings: [{ name: b.customerName, bookingNo: ref, bookedPax: pax, actualPax: null, tickets: "", status: "" }] } });
+  }
+  await prisma.booking.create({ data: { source: "GetYourGuide", tourId: "T-900", date: TOMORROW, slotIdx: 2, pax: 2, customerName: "Guest E2E-NEW", externalRef: "E2E-NEW-2", status: "PENDING" } });
   return { op };
 }
 
@@ -96,33 +107,54 @@ const openDialog = async (page) => {
   await page.goto(`${BASE}/jobs`, { waitUntil: "networkidle0" });
   await page.waitForFunction(() => [...document.querySelectorAll("button")].some((b) => b.innerText.trim() === "Split"), { timeout: 20000 });
   await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.innerText.trim() === "Split").click());
-  await page.waitForSelector(".js-split-new-to select", { timeout: 20000 }).catch(async (e) => { console.log("PAGE:", (await page.evaluate(() => document.body.innerText)).slice(0, 1500)); throw e; });
+  await page.waitForFunction(() => /Split across guides/.test(document.querySelector(".modal")?.innerText ?? ""), { timeout: 20000 });
+};
+const openInbox = async (page) => {
+  await page.goto(`${BASE}/bookings`, { waitUntil: "networkidle0" });
+  // Expand every day so tomorrow's card is on the page.
+  await page.evaluate(() => [...document.querySelectorAll("button")].filter((b) => /Nov|Dec|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct/.test(b.innerText) && b.querySelector("b")).forEach((b) => { if (!b.nextElementSibling) b.click(); }));
+  await page.waitForSelector(".js-needs-guide", { timeout: 20000 }).catch(async (e) => { console.log("PAGE:", (await page.evaluate(() => document.body.innerText)).slice(0, 1500)); throw e; });
 };
 try {
   for (const width of [390, 1280]) {
     const page = await browser.newPage();
-    await page.setViewport({ width, height: 900 });
+    await page.setViewport({ width, height: 900, isMobile: width < 600, hasTouch: width < 600 });
     const errors = []; page.on("pageerror", (e) => errors.push(String(e)));
     await page.setCookie(await sessionCookie(data.op.email));
     await openDialog(page);
-    const opts = await page.$$eval(".js-split-new-to option", (os) => os.map((o) => o.textContent.trim()));
-    check(`${width}px: the dialog offers the departure's guides, or Ask me each time`, opts[0] === "Ask me each time" && opts.some((o) => /G-981/.test(o)) && opts.some((o) => /G-982/.test(o)), JSON.stringify(opts));
-    check(`${width}px: no sideways scroll`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    check(`${width}px: the Split dialog has no "New bookings go to"`, !(await page.$(".js-split-new-to")) && !/New bookings go to/.test(await page.evaluate(() => document.querySelector(".modal").innerText)));
+    check(`${width}px: no sideways scroll (Split)`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+
+    await openInbox(page);
+    const card = await page.$eval(".js-needs-guide", (x) => x.closest(".op-toolbar").innerText);
+    const buttons = await page.$$eval(".js-give-to", (bs) => bs.map((b) => `${b.dataset.guide}|${b.innerText.trim()}|${b.disabled}`));
+    check(`${width}px: the waiting booking's card says it needs a guide — never "Assigned to" the first guide`, /Needs a guide — 2 guides on this tour/i.test(card) && !/Assigned to/.test(card) && /E2E-NEW-2/.test(card), card.replace(/\s+/g, " ").slice(0, 300));
+    check(`${width}px: Give to offers both guides with their pax`, buttons.length === 2 && buttons.some((b) => /^G-981\|G-981 Fon Example · 3\/12\|false$/.test(b)) && buttons.some((b) => /^G-982\|G-982 Mai Example · 6\/12\|false$/.test(b)), JSON.stringify(buttons));
+    check(`${width}px: no sideways scroll (Bookings)`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), String(await page.evaluate(() => document.documentElement.scrollWidth)));
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, `needs-guide-${width}.png`), fullPage: true });
+
     if (width === 390) {
       // The deep link from the Understaffed card opens the same dialog (it used to close at once).
       const p2 = await browser.newPage();
       await p2.setCookie(await sessionCookie(data.op.email));
       await p2.goto(`${BASE}/jobs?split=${TODAY}&slot=2`, { waitUntil: "networkidle0" });
-      check("the /jobs?split= link opens the Split dialog", !!(await p2.waitForSelector(".js-split-new-to select", { timeout: 15000 }).catch(() => null)));
+      check("the /jobs?split= link opens the Split dialog", !!(await p2.waitForFunction(() => /Split across guides/.test(document.querySelector(".modal")?.innerText ?? ""), { timeout: 15000 }).catch(() => null)));
       await p2.close();
-      await page.select(".js-split-new-to select", "G-981");
-      if (SHOTS) await page.screenshot({ path: join(SHOTS, "split-new-bookings-390.png") });
-      await Promise.all([page.waitForResponse((r) => r.url().includes("/api/bookings/split") && r.ok(), { timeout: 20000 }), page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => b.innerText.trim() === "Assign split").click())]);
-      const a = await prisma.assignment.findMany({ where: { date: TODAY, slotIdx: 2 }, orderBy: { guideId: "asc" } });
-      check("saved: Fon takes new bookings, Mai does not", a.map((x) => `${x.guideId}:${x.takesNewBookings}`).join(",") === "G-981:true,G-982:false", JSON.stringify(a.map((x) => [x.guideId, x.takesNewBookings])));
     } else {
-      const chosen = await page.$eval(".js-split-new-to select", (s) => s.value);
-      check("reopened: the dialog shows Fon already chosen", chosen === "G-981", chosen);
+      // Give it to Mai: her sheet and pax only.
+      await Promise.all([
+        page.waitForResponse((r) => r.url().includes("/api/bookings/place"), { timeout: 20000 }),
+        page.evaluate(() => document.querySelector('.js-give-to[data-guide="G-982"]').click()),
+      ]);
+      await page.waitForFunction(() => /Given to G-982/.test(document.body.innerText), { timeout: 20000 }).catch(() => {});
+      const nb = await prisma.booking.findFirstOrThrow({ where: { externalRef: "E2E-NEW-2" } });
+      const rows = async (g) => ((await prisma.jobSheet.findUniqueOrThrow({ where: { guideId_date_slotIdx: { guideId: g, date: TOMORROW, slotIdx: 2 } } })).bookings ?? []).map((r) => r.bookingNo);
+      const pax = async (g) => (await prisma.assignment.findFirstOrThrow({ where: { guideId: g, date: TOMORROW, slotIdx: 2 } })).pax;
+      check("Give to Mai: the booking is hers, on her job sheet, her pax 6 → 8", nb.assignedGuideId === "G-982" && (await rows("G-982")).includes("E2E-NEW-2") && (await pax("G-982")) === 8, JSON.stringify({ tag: nb.assignedGuideId, rows: await rows("G-982"), pax: await pax("G-982") }));
+      check("Fon is untouched: same sheet, same pax", JSON.stringify(await rows("G-981")) === JSON.stringify(["E2E-TM-1"]) && (await pax("G-981")) === 3);
+      check("the card no longer needs a guide", !(await page.$(".js-needs-guide")));
+      check("audited as the operator", (await prisma.auditLog.count({ where: { action: "bookings.placed", actorId: data.op.id } })) === 1);
+      if (SHOTS) await page.screenshot({ path: join(SHOTS, `needs-guide-given.png`), fullPage: true });
     }
     check(`${width}px: no page error`, errors.length === 0, errors.join(" | ").slice(0, 200));
     await page.close();

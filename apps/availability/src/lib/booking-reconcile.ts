@@ -358,30 +358,14 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
   // everything read below is the state the writes land on. (A NEW assignment or sheet row
   // is not stopped by a row lock; the final validation catches those.)
   await tx.$queryRaw`SELECT id FROM "Assignment" WHERE "date" = ${dep.date} AND "slotIdx" = ${dep.slotIdx} ORDER BY id FOR UPDATE`;
-  const assigns = await tx.assignment.findMany({ where: dep, select: { id: true, guideId: true, tourId: true, pax: true, takesNewBookings: true }, orderBy: { id: "asc" } });
+  const assigns = await tx.assignment.findMany({ where: dep, select: { id: true, guideId: true, tourId: true, pax: true }, orderBy: { id: "asc" } });
   if (!assigns.length) return { result: { ...result, kind: "no-job" as const }, issues, notices };
   await tx.$queryRaw`SELECT id FROM "JobSheet" WHERE "date" = ${dep.date} AND "slotIdx" = ${dep.slotIdx} ORDER BY id FOR UPDATE`;
 
-  // A guide the operator named in the Split dialog to take new bookings (owner, 2026-11-07):
-  // a NEW booking (PENDING, untagged) on that guide's tour here is tagged to them first,
-  // so the ordinary rule below places it on their sheet. Only when exactly one guide on
-  // that tour was named, and only while their group stays within the seat cap; otherwise
-  // it waits for an operator as before.
-  for (const tourId of new Set(assigns.filter((a) => a.takesNewBookings).map((a) => a.tourId))) {
-    const named = assigns.filter((a) => a.tourId === tourId && a.takesNewBookings);
-    if (named.length !== 1) continue;
-    const g = named[0].guideId;
-    const fresh = await tx.booking.findMany({ where: { ...dep, tourId, status: "PENDING", assignedGuideId: null }, select: { id: true, pax: true, externalRef: true, confirmationCode: true }, orderBy: { createdAt: "asc" } });
-    if (!fresh.length) continue;
-    let held = (await tx.booking.aggregate({ where: { ...dep, tourId, assignedGuideId: g, status: { in: [...LIVE] } }, _sum: { pax: true } }))._sum.pax ?? 0;
-    for (const b of fresh) {
-      if (held + (b.pax ?? 0) > PAX_PER_GUIDE) break;
-      held += b.pax ?? 0;
-      await tx.booking.update({ where: { id: b.id }, data: { assignedGuideId: g } });
-      await tx.auditLog.create({ data: { actorId: null, actorRole: "SYSTEM", action: "booking.tagged_new_bookings_guide", entityType: "Booking", entityId: b.id,
-        detail: { date: dep.date, slotIdx: dep.slotIdx, guideId: g, bookingRef: bookingRef(b.externalRef, b.confirmationCode) || null, pax: b.pax, why: "the departure's new bookings go to this guide (Split dialog)" } } });
-    }
-  }
+  // A new booking on a departure several guides share is never tagged to one of them
+  // automatically (owner, 22 Nov 2026 — replaces "New bookings go to" of 7 Nov): it stays
+  // untagged, is raised for review below, and an operator gives it to a guide to balance the
+  // groups (Bookings inbox → Give to, or Split). Assignment.takesNewBookings is no longer read.
 
   const bookings: LoadedBooking[] = await tx.booking.findMany({
     where: { ...dep, status: { in: [...LIVE, "CANCELLED"] } },

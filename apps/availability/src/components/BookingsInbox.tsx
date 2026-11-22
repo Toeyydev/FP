@@ -21,6 +21,8 @@ type Booking = {
   guideId?: string | null; guide?: string | null;
   /** A guide at the same time on ANOTHER tour — not this booking's guide (api/bookings). */
   otherTourGuide?: { guideId: string; guide: string; tourId: string } | null;
+  /** Several guides run this tour and none has this booking yet: who, with their pax (api/bookings). */
+  needsGuide?: { guideId: string; guide: string; pax: number }[] | null;
 };
 type Tour = { id: string; name: string; time: string };
 
@@ -160,6 +162,18 @@ export default function BookingsInbox() {
   // Put the chosen guide on this tour DIRECTLY — no offer to accept. For a job agreed
   // by phone, or when the guide's Accept on LINE is not reaching FolkOPS. The server
   // still refuses a clash, leave, a blocked day or a slot someone already has.
+  // A tour several guides share: give its waiting bookings to one of them (owner, 22 Nov 2026).
+  const [placing, setPlacing] = useState("");
+  async function placeGroup(items: Booking[], guideId: string, name: string) {
+    setPlacing(guideId);
+    const r = await fetch("/api/bookings/place", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bookingIds: items.map((b) => b.id), guideId }) });
+    const d = await r.json().catch(() => ({}));
+    setPlacing("");
+    if (!r.ok) { setMsg(`Not given: ${d.detail ?? `error ${r.status}`}`); return; }
+    setMsg(`✓ Given to ${guideId} · ${name} — now ${d.pax} pax.${d.detail ? ` ${d.detail}` : ""}`);
+    await load();
+  }
+
   async function assignGroup(key: string, items: Booking[], guideId: string) {
     const date = items[0].date!; const slotIdx = items[0].slotIdx!; const tourId = groupTourId(items);
     const pax = items.reduce((s, b) => s + (b.pax ?? 0), 0) || undefined;
@@ -449,6 +463,9 @@ export default function BookingsInbox() {
                         const assignedGuide = items.find((b) => b.guideId)?.guideId ?? null;
                         const assignedName = items.find((b) => b.guide)?.guide ?? null;
                         const otherTour = assignedGuide ? null : items.find((b) => b.otherTourGuide)?.otherTourGuide ?? null;
+                        const waiting = items.filter((b) => b.needsGuide?.length);
+                        const shareGuides = waiting[0]?.needsGuide ?? null;
+                        const waitingPax = waiting.reduce((s, b) => s + (b.pax ?? 0), 0);
                         return (
                           <div key={key} className="op-toolbar" style={{ borderRadius: 10, border: "1px solid var(--line)", background: assignedGuide ? "var(--grey-bg, #f6f5f3)" : "#fff", flexWrap: "wrap", alignItems: "center" }}>
                             <div style={{ flex: 1, minWidth: 240 }}>
@@ -465,7 +482,23 @@ export default function BookingsInbox() {
                                 ))}
                               </div>
                             </div>
-                            {assignedGuide ? (
+                            {shareGuides ? (
+                              <div className="js-needs-guide" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+                                <span className="badge" title="Several guides run this tour and none has these bookings yet — give them to one to balance the groups" style={{ background: "#fdf3e7", color: "#b45309", fontSize: 12, fontWeight: 700 }}>⚠ Needs a guide — {shareGuides.length} guides on this tour</span>
+                                <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>Give to:</span>
+                                {shareGuides.map((g) => {
+                                  const over = g.pax + waitingPax > CAP;
+                                  return (
+                                    <button key={g.guideId} className="btn sm js-give-to" data-guide={g.guideId} disabled={over || !!placing}
+                                      title={over ? `${g.guideId} has ${g.pax} — with ${waitingPax} more that is over ${CAP}` : `Give ${waitingPax} pax to ${g.guideId} (${g.pax} → ${g.pax + waitingPax})`}
+                                      style={over ? { color: "var(--danger, #b3402f)", borderColor: "var(--danger, #b3402f)" } : undefined}
+                                      onClick={() => placeGroup(waiting, g.guideId, g.guide)}>
+                                      {placing === g.guideId ? "Giving…" : <>{g.guideId} {g.guide} · {g.pax}/{CAP}</>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : assignedGuide ? (
                               <span className="badge active" title="This slot is already dispatched to a guide" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700 }}>✓ Assigned to <span className="gid">{assignedGuide}</span>{assignedName && assignedName !== assignedGuide ? ` · ${assignedName}` : ""}</span>
                             ) : (
                               <>
