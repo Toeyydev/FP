@@ -312,10 +312,12 @@ function ReversalsPanel({ rows, isAdmin, onDone }: { rows: Reversal[]; isAdmin: 
       await onDone("Refund recorded — approve it below");
     } catch (e) { setErr((e as Error).message); }
   };
+  // Owner, 22 Nov 2026: nothing to decide = no panel. It appears when a reversal is waiting.
+  if (rows.length === 0) return null;
   return (
     <section className="panel js-reversals" style={{ marginBottom: 14, padding: 14, display: "grid", gap: 10 }}>
       <b>Sale reversals waiting for Admin</b>
-      {rows.length === 0 ? <div className="muted">None.</div> : rows.map((r) => (
+      {rows.map((r) => (
         <div key={r.id} style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 10, display: "grid", gap: 6, fontSize: 13.5 }}>
           <div><b>{r.saleNo}</b> · {baht(r.grossSatang)} · {r.guideId} · {r.jobRef ?? ""} · {r.kind === "RECORDED_IN_ERROR" ? "Recorded in error" : "Refunded to the guest"}</div>
           {r.kind === "RECORDED_IN_ERROR"

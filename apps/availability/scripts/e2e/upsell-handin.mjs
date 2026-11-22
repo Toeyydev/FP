@@ -229,6 +229,7 @@ try {
   };
   await goto(desk, "/upsell-cash");
   await desk.waitForSelector(".js-confirm");
+  check("no reversal waiting: the Sale reversals panel is not shown (owner, 22 Nov 2026)", (await desk.$(".js-reversals")) === null);
   await desk.click(".js-confirm");
   await desk.waitForSelector(".js-slips-dialog");
   await fill(owed / 100 - 50);
