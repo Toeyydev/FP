@@ -124,6 +124,31 @@ async function open(user, width) {
 const tap = async (page, sel) => { await page.$eval(sel, (el) => el.scrollIntoView({ block: "center" })); await pause(150); await page.click(sel); };
 const setVal = async (page, sel, v) => { await page.$eval(sel, (el) => el.scrollIntoView({ block: "center" })); const h = await page.$(sel); await h.click({ clickCount: 3 }); await page.keyboard.press("Backspace"); if (v !== "") await h.type(v); };
 const noSideways = (page) => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+// The operator's accounting row for one fixed item: its grey "Guide reported" line, Price / Qty boxes, reason box.
+const fixedRowSel = (item) => `tr:has(select.js-standard-expense-description option:checked[value="${item}"])`;
+const guideLine = (page, item) => page.$eval(`${fixedRowSel(item)} .js-guide-reported`, (x) => x.textContent).catch(() => "");
+const setRowNum = async (page, item, which, v) => {
+  await page.evaluate((sel, which, v) => {
+    const inp = document.querySelectorAll(`${sel} input[type="number"]`)[which];
+    inp.scrollIntoView({ block: "center" });
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(inp, String(v));
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+  }, fixedRowSel(item), which === "price" ? 0 : 1, v);
+  await pause(200);
+};
+const setReason = async (page, item, v) => {
+  await page.evaluate((sel, v) => {
+    const inp = document.querySelector(`${sel} .js-variance-reason`);
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(inp, v);
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+  }, fixedRowSel(item), v);
+  await pause(200);
+};
+const pressSave = async (page) => {
+  await page.evaluate(() => [...document.querySelectorAll(".js-bar button")].find((b) => b.textContent.trim() === "Save").click());
+  await pause(2500);
+  return page.evaluate(() => document.body.innerText);
+};
 
 try {
   const gCookie = await sessionCookie(data.guide.email);
@@ -206,6 +231,54 @@ try {
     const tickets = await page.$$eval(".js-ticket-row", (xs) => xs.map((x) => x.getAttribute("data-status")));
     check("guide: the Grand Palace receipt shows Verified", tickets[0] === "VERIFIED", JSON.stringify(tickets));
     if (SHOTS) await page.screenshot({ path: join(SHOTS, "expense-review-guide-after-390.png"), fullPage: true });
+    await page.close();
+  }
+
+  // ── OPERATOR corrects the guide's figures: Price and Qty separately, with a reason (owner 2026-11-22) ──
+  {
+    const { page, errors } = await open(data.op, 1280);
+    const lines = { W: await guideLine(page, "Water (Inc. Guide)"), B: await guideLine(page, "Bus (Inc. Guide)"), F: await guideLine(page, "Ferry (Inc. Guide)") };
+    check("operator 1280: each fixed row shows the guide's own Price × Qty in grey",
+      /Guide reported ฿10 × 6 = ฿60\.00/.test(lines.W) && /Guide reported ฿15 × 6 = ฿90\.00/.test(lines.B) && /Guide reported ฿8 × 6 = ฿48\.00/.test(lines.F), JSON.stringify(lines));
+    await setRowNum(page, "Bus (Inc. Guide)", "price", 30);
+    await setRowNum(page, "Bus (Inc. Guide)", "qty", 3);
+    check("operator 1280: 30 × 3 (same ฿90) still shows the guide's 15 × 6 and asks for a reason",
+      /Guide reported ฿15 × 6 = ฿90\.00.*office changed price & qty/.test(await guideLine(page, "Bus (Inc. Guide)")) && !!(await page.$(`${fixedRowSel("Bus (Inc. Guide)")} .js-variance-reason`)));
+    const refused = await pressSave(page);
+    const busNow = (await sheetRow()).expenses.find((e) => e.description === "Bus (Inc. Guide)");
+    check("operator 1280: Save without a reason is refused by the server, nothing written", /Not saved/.test(refused) && /Bus.*price and qty/.test(refused) && busNow.price === 15 && busNow.pax === 6, `${busNow.price}x${busNow.pax}`);
+    await setReason(page, "Bus (Inc. Guide)", "One leg by boat, 3 fares");
+    await pressSave(page);
+    const bus = (await sheetRow()).expenses.find((e) => e.description === "Bus (Inc. Guide)");
+    const audit = await prisma.auditLog.findFirst({ where: { action: "jobsheet.guide_variance" } });
+    const ch = audit?.detail?.changes?.[0];
+    check("operator 1280: with a reason it saves — row 30 × 3, the guide's 15 × 6 kept, audited with who",
+      bus.price === 30 && bus.pax === 3 && bus.guideReported?.price === 15 && bus.guideReported?.qty === 6 && bus.guideVarianceReason === "One leg by boat, 3 fares"
+        && ch && ch.guide.price === 15 && ch.guide.qty === 6 && ch.after.price === 30 && ch.after.qty === 3 && JSON.stringify(ch.changed) === '["price","qty"]' && audit.actorId === data.op.id,
+      JSON.stringify({ bus, ch }));
+    // Fill down skips the three rows the guide reported, and says so.
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Fill down").click());
+    await pause(400);
+    const said = await page.evaluate(() => document.body.innerText);
+    const qtys = await page.evaluate((sels) => sels.map((s) => document.querySelectorAll(`${s} input[type="number"]`)[1]?.value), ["Water (Inc. Guide)", "Bus (Inc. Guide)", "Ferry (Inc. Guide)"].map(fixedRowSel));
+    check("operator 1280: Fill down skips Water, Bus and Ferry and names them; their Qty stays", /Skipped 3 rows the guide reported: Water \(Inc\. Guide\), Bus \(Inc\. Guide\), Ferry \(Inc\. Guide\)/.test(said) && JSON.stringify(qtys) === '["6","3","6"]', JSON.stringify(qtys));
+    check("operator 1280: no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "guide-variance-1280.png"), fullPage: true });
+    await page.close();
+  }
+  {
+    const { page, errors } = await open(data.op, 390);
+    check("operator 390: the grey line shows the guide's figures beside the office's", /Guide reported ฿15 × 6 = ฿90\.00.*office changed price & qty/.test(await guideLine(page, "Bus (Inc. Guide)")));
+    await setRowNum(page, "Ferry (Inc. Guide)", "qty", 4);
+    const refused = await pressSave(page);
+    check("operator 390: Qty only (Ferry 6 → 4) without a reason is refused", /Not saved/.test(refused) && /Ferry.*qty differs/.test(refused));
+    await setReason(page, "Ferry (Inc. Guide)", "Two guests left before the ferry");
+    await pressSave(page);
+    const ferry = (await sheetRow()).expenses.find((e) => e.description === "Ferry (Inc. Guide)");
+    check("operator 390: with a reason, Ferry is 8 × 4 and the guide's 8 × 6 is kept", ferry.price === 8 && ferry.pax === 4 && ferry.guideReported?.qty === 6, JSON.stringify(ferry));
+    check("operator 390: still no sideways scroll", (await noSideways(page)) <= 0, String(await noSideways(page)));
+    check("operator 390: no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, "guide-variance-390.png"), fullPage: true });
     await page.close();
   }
 } finally {

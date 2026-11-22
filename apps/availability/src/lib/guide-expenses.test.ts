@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 const prismaMock = vi.hoisted(() => ({
-  jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), findMany: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })), create: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
   assignment: { findUnique: vi.fn(), count: vi.fn() },
   tour: { findUnique: vi.fn() },
@@ -51,8 +51,9 @@ describe("submitGuideExpenses", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     expect(await report({ note: "  paid cash  " })).toEqual({ ok: true, driveLink: "https://drive.example.test/sheet" });
 
-    const { where, data } = prismaMock.jobSheet.update.mock.calls[0][0];
-    expect(where).toEqual(KEY);
+    const { where, data } = prismaMock.jobSheet.updateMany.mock.calls[0][0];
+    expect(where).toMatchObject({ id: "js_1" }); // conditional on the sheet as read (updatedAt)
+    expect(prismaMock.jobSheet.findUnique.mock.calls.at(-1)![0].where).toEqual(KEY);
     // A payer sent with no word on who chose it is kept, and labelled as not confirmed. The
     // short name a guide types is stored under its fixed name and category (owner 2026-11-15).
     expect(data.guideExpenses).toEqual([{ description: "Water (Inc. Guide)", expenseType: "meal", price: 10, pax: 4, paidBy: "guide", paidBySource: "unconfirmed" }]);
@@ -66,18 +67,18 @@ describe("submitGuideExpenses", () => {
   it("leaves the job's rows alone once the job sheet is approved or paid", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [], expenses: [], approvalStatus: "APPROVED" });
     await report();
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].data).not.toHaveProperty("expenses");
-    prismaMock.jobSheet.update.mockClear();
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].data).not.toHaveProperty("expenses");
+    prismaMock.jobSheet.updateMany.mockClear();
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [], expenses: [] });
     prismaMock.tourPayment.findUnique.mockResolvedValue({ status: "PAID" });
     await report();
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].data).not.toHaveProperty("expenses");
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].data).not.toHaveProperty("expenses");
   });
 
   it("never stores a review reward in the guide's report — it is the operator's to record", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     await report({ expenses: [{ description: "Water", price: 10, pax: 4, paidBy: "guide" }, { description: "Review reward", price: 50, pax: 2 }] });
-    const { data } = prismaMock.jobSheet.update.mock.calls[0][0];
+    const { data } = prismaMock.jobSheet.updateMany.mock.calls[0][0];
     expect(data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Water (Inc. Guide)"]);
   });
 
@@ -86,22 +87,22 @@ describe("submitGuideExpenses", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     await expect(report({ expenses: [{ description: "Water", price: 10, pax: 4 }, { description: "Wat Pho", price: 300, pax: 2, expenseType: "entrance" }] }))
       .rejects.toMatchObject({ refused: true, reasons: [expect.stringMatching(/Wat Pho.*cannot be reported/)] });
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
   });
   it("refuses the same item twice, and drops a 0 line as not used", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     await expect(report({ expenses: [{ description: "Bus", price: 15, pax: 2 }, { description: "Bus (Inc. Guide)", price: 15, pax: 1 }] })).rejects.toMatchObject({ refused: true });
     await report({ expenses: [{ description: "Bus", price: 15, pax: 2 }, { description: "Ferry (Inc. Guide)", price: 8, pax: 0 }] });
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Bus (Inc. Guide)"]);
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].data.guideExpenses.map((e: { description: string }) => e.description)).toEqual(["Bus (Inc. Guide)"]);
   });
   it("lets a food tour send its food total; an operator filing for a guide is not limited", async () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-007", bookings: [] });
     await report({ expenses: [{ description: "ค่าอาหาร Food Tour", price: 1850, pax: 1, expenseType: "meal" }] });
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses[0].description).toBe("ค่าอาหาร Food Tour");
-    prismaMock.jobSheet.update.mockClear();
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].data.guideExpenses[0].description).toBe("ค่าอาหาร Food Tour");
+    prismaMock.jobSheet.updateMany.mockClear();
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     await report({ actorRole: "OPERATOR", expenses: [{ description: "Wat Pho", price: 300, pax: 2 }] });
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses[0].description).toBe("Wat Pho");
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].data.guideExpenses[0].description).toBe("Wat Pho");
   });
 
   it("fills actual pax on the sheet from the no-shows already recorded", async () => {
@@ -120,7 +121,7 @@ describe("submitGuideExpenses", () => {
     ]);
 
     await report();
-    const rows = prismaMock.jobSheet.update.mock.calls[0][0].data.bookings;
+    const rows = prismaMock.jobSheet.updateMany.mock.calls[0][0].data.bookings;
     expect(rows.map((r: { actualPax: number; noShowPax: number; status: string }) => [r.noShowPax, r.actualPax, r.status])).toEqual([
       [1, 3, "partial"],
       [2, 0, "no-show"],
@@ -131,7 +132,7 @@ describe("submitGuideExpenses", () => {
 
   it("scaffolds a sheet when the job has none yet", async () => {
     await report();
-    expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
     const data = prismaMock.jobSheet.create.mock.calls[0][0].data;
     expect(data).toMatchObject({ ref: null, guideId: "G-001", date: "2026-09-12", slotIdx: 0, tourId: "T-001", status: "Confirmed", createdById: "u_1" });
     expect(jobrefMock.ensureJobRef).toHaveBeenCalledWith("js_new", "2026-09-12"); // numbered through the one reservation path
@@ -211,7 +212,7 @@ describe("submitGuideExpenses", () => {
     prismaMock.jobSheet.findUnique.mockResolvedValue({ id: "js_1", tourId: "T-001", bookings: [] });
     (notifyOps as unknown as { mockRejectedValueOnce: (e: Error) => void }).mockRejectedValueOnce(new Error("smtp down"));
     expect(await report()).toEqual({ ok: true, driveLink: "https://drive.example.test/sheet" });
-    expect(prismaMock.jobSheet.update).toHaveBeenCalled();
+    expect(prismaMock.jobSheet.updateMany).toHaveBeenCalled();
   });
 });
 
@@ -233,7 +234,7 @@ describe("Paid By on a report the guide files after the tour", () => {
   const OFFICIAL = [{ description: "Ferry (Inc. Guide)", price: 5, pax: null, paidBy: "company" }];
   const file = (over: Partial<Parameters<typeof submitGuideExpenses>[0]> = {}) =>
     submitGuideExpenses({ guideId: "G-001", date: DAY, slotIdx: 0, expenses: lines(), actorId: "u_1", actorRole: "GUIDE", ...over });
-  const stored = () => prismaMock.jobSheet.update.mock.calls[0][0].data.guideExpenses as { description: string; paidBy?: string; paidBySource?: string; paidByChoice?: string }[];
+  const stored = () => prismaMock.jobSheet.updateMany.mock.calls[0][0].data.guideExpenses as { description: string; paidBy?: string; paidBySource?: string; paidByChoice?: string }[];
   const auditDetail = () => (audit as unknown as { mock: { calls: { detail: Record<string, unknown> }[][] } }).mock.calls[0][0].detail;
   const summary = () => stored().map((e) => [e.description, e.paidBy, e.paidBySource]);
 

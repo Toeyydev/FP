@@ -28,6 +28,10 @@ const expenseZ = z.object({
   // save refuses an override without one. Dropped here before 2026-10-01, so no override
   // could ever be saved from the editor.
   paidByReason: z.string().max(500).optional(),
+  // Why the operator's Price or Qty differs from what the guide reported for Water / Bus / Ferry
+  // (lib/guide-snapshot). Required by the save when a row is changed away from the guide's figures.
+  // The snapshot itself (`guideReported`) is server-owned and deliberately NOT accepted here.
+  guideVarianceReason: z.string().max(500).optional(),
   // The booked Rates a suggested payer came from (lib/rate-payer), e.g. "TICKET_INCLUDED".
   // Display and audit only: a suggestion is never evidence and is recomputed on every save.
   rateBasis: z.string().max(80).optional(),

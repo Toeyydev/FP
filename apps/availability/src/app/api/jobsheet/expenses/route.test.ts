@@ -7,7 +7,7 @@ const prismaMock = vi.hoisted(() => ({
   assignment: { findUnique: vi.fn(), count: vi.fn() },
   tourPayment: { findUnique: vi.fn() },
   payrollStatus: { findUnique: vi.fn() },
-  jobSheet: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn(), findMany: vi.fn() },
+  jobSheet: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(async () => ({ count: 1 })), create: vi.fn(), findMany: vi.fn() },
   booking: { findMany: vi.fn() },
   tour: { findUnique: vi.fn() },
   // Read by the report's payer rules once they land (PR #201, and the job-duration lookup after it); harmless before.
@@ -34,7 +34,7 @@ const body = { guideId: "G-001", date: "2030-04-06", slotIdx: 2, expenses: [{ de
 const post = (b: unknown) => POST(new Request("https://ops.folkpaths.com/api/jobsheet/expenses", { method: "POST", body: JSON.stringify(b), headers: { "content-type": "application/json" } }) as never);
 const as = (role: string, guideId: string | null) => { session.current = { user: { id: `u_${role}`, role, guideId } }; };
 const nothingWritten = () => {
-  expect(prismaMock.jobSheet.update).not.toHaveBeenCalled();
+  expect(prismaMock.jobSheet.updateMany).not.toHaveBeenCalled();
   expect(prismaMock.jobSheet.create).not.toHaveBeenCalled();
   expect(audit).not.toHaveBeenCalled();
   expect(notifyOps).not.toHaveBeenCalled();
@@ -63,7 +63,8 @@ describe("POST /api/jobsheet/expenses — who may file", () => {
   it("a guide files their own assigned job", async () => {
     const res = await post(body);
     expect(res.status).toBe(200);
-    expect(prismaMock.jobSheet.update.mock.calls[0][0].where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2030-04-06", slotIdx: 2 } });
+    expect(prismaMock.jobSheet.updateMany.mock.calls[0][0].where).toMatchObject({ id: "js_1" });
+    expect(prismaMock.jobSheet.findUnique.mock.calls.at(-1)![0].where).toEqual({ guideId_date_slotIdx: { guideId: "G-001", date: "2030-04-06", slotIdx: 2 } });
   });
 
   it("a guide cannot file another guide's job — 403, nothing written", async () => {

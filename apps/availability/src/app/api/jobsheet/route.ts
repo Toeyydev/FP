@@ -47,6 +47,7 @@ import type { SheetRow } from "@/lib/advances/settlement";
 import type { Prisma } from "@prisma/client";
 import { FIXED_ITEMS, operatorRowProblems } from "@/lib/guide-fixed-expenses";
 import { reviewHistory } from "@/lib/job-expense-review";
+import { carryGuideReported, guideVarianceCheck, type Row as SnapshotRow, type VarianceChange } from "@/lib/guide-snapshot";
 import { accountForExpenseType } from "@/lib/peak-accounts";
 
 function ops(role?: string) {
@@ -569,6 +570,7 @@ export async function PUT(req: NextRequest) {
   let amountChanges: { row: string; from: string; to: string }[] = [];
   const isOpsSave = ops(session!.user!.role);
   let advanceLinks: { row: string; from: string | null; to: string | null }[] = [];
+  let varianceChanges: VarianceChange[] = [];
   const written = await prisma.$transaction(async (tx) => {
     const current = await tx.jobSheet.findUnique({ where: key, select: { id: true, expenses: true, guideFee: true, updatedAt: true, approvalStatus: true } });
     if (current && d.baseUpdatedAt && new Date(d.baseUpdatedAt).getTime() !== current.updatedAt.getTime()) {
@@ -649,7 +651,14 @@ export async function PUT(req: NextRequest) {
     // Every row gets its stable id (lib/expense-row-id), and the legacy receipt fields are
     // re-read from the attachments table: a file attached while this sheet was open in
     // another tab is not wiped by saving the older copy.
-    const withIds = ensureRowIds(stamped as unknown as Expense[]).rows;
+    // The guide's Water / Bus / Ferry snapshot is the server's (lib/guide-snapshot): carried from
+    // the stored row by id, never taken from the request. A Price or Qty changed away from it in
+    // this save needs a reason; put back to the guide's figures, it needs none.
+    const withIds0 = ensureRowIds(stamped as unknown as Expense[]).rows;
+    const variance = guideVarianceCheck((current?.expenses as SnapshotRow[] | null) ?? [], carryGuideReported((current?.expenses as SnapshotRow[] | null) ?? [], withIds0 as SnapshotRow[]));
+    if (variance.problems.length) return { kind: "guide-variance" as const, problems: variance.problems };
+    varianceChanges = variance.changes;
+    const withIds = variance.rows as unknown as Expense[];
     // …and each row's "no receipt" reason is the stored one (lib/expense-attachments/no-receipt-row):
     // a save never sets it, so an older copy of the sheet cannot wipe or forge it.
     const expenses = carryNoReceipt((current?.expenses as { rowId?: string | null }[] | null) ?? [], current ? await mirrorAll(tx, current.id, withIds) : withIds) as unknown as Prisma.InputJsonValue;
@@ -670,6 +679,9 @@ export async function PUT(req: NextRequest) {
   }
   if (written.kind === "fixed-items") {
     return NextResponse.json({ error: "fixed-items", reasons: written.problems, detail: written.problems.join("\n") }, { status: 400 });
+  }
+  if (written.kind === "guide-variance") {
+    return NextResponse.json({ error: "guide-variance", reasons: written.problems, detail: written.problems.join("\n") }, { status: 400 });
   }
   if (written.kind === "fee-invalid") {
     return NextResponse.json({ error: "fee-adjustment", reasons: written.problems }, { status: 400 });
@@ -710,6 +722,12 @@ export async function PUT(req: NextRequest) {
   }
   const restoredNoShows = restored.map((r) => r.bookingNo);
   const noShowMismatches = mismatched;
+  // Each Water / Bus / Ferry row saved away from the guide's report: the guide's Price and Qty,
+  // the row's before and after, which of the two differ, the reason — and who and when (the
+  // audit row's actor and time).
+  if (varianceChanges.length) {
+    await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.guide_variance", entityType: "JobSheet", entityId: sheet.id, detail: { ref, changes: varianceChanges } });
+  }
   await audit({ actorId: session!.user!.id ?? null, actorRole: session!.user!.role ?? null, action: "jobsheet.saved", entityType: "JobSheet", entityId: sheet.id, detail: { ref, ...(restoredNoShows.length ? { restoredNoShows } : {}), ...(noShowMismatches.length ? { noShowMismatches } : {}), ...(forged ? { ignoredClientOwnedFields: true } : {}), ...(payerReasons.length ? { payerReasons } : {}), ...(payerChanges.length ? { payerChanges } : {}), ...(amountChanges.length ? { amountChanges } : {}), ...(advanceLinks.length ? { advanceLinks } : {}) } });
   // The saved sheet goes back to whoever saved it — an operator, usually — so the rows
   // that a certificate stands behind are stripped on the way out for anyone but an admin.
