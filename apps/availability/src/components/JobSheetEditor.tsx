@@ -2644,7 +2644,7 @@ export default function JobSheetEditor() {
 
           {/* Extras cash the guide collected for the company — its own block, never part of the
               guide's pay above. Read only; nothing is drawn while Extras is off. */}
-          <UpsellJobStaff guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} />
+          <UpsellJobStaff guideId={sheet.guideId} date={sheet.date} slotIdx={sheet.slotIdx} isAdmin={isAdmin} />
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ink-soft)", fontWeight: 700 }}>PEAK accounting</div>
