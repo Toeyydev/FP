@@ -604,6 +604,16 @@ jobs:
           AUTH_SECRET: ci-build-only-not-a-real-secret
           E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-handin
 
+      # The office records a cash sale for the guide on the Job Sheet (owner, 22 Nov 2026): past job,
+      # reason + cash date; the guide hands it in with ref = the Job Ref; an Admin confirms on the
+      # Job Sheet; 1280 + 390 px.
+      - name: Extras sale recorded by the office in a real browser
+        run: node scripts/e2e/upsell-office-sale.mjs
+        env:
+          SKIP_ENV_VALIDATION: "1"
+          AUTH_SECRET: ci-build-only-not-a-real-secret
+          E2E_SCREEN_DIR: ${{ runner.temp }}/historical-evidence-screens/upsell-office-sale
+
       # Walk-in seat (pr4w + pr4q): manual sale and the guest QR — the QR decodes to its bound
       # URL; a guest with no account registers (no money); the guide's "Cash received" makes the
       # sale; the guest list, the PAID page and the hand-in code before any transfer; 390 + 1280 px.

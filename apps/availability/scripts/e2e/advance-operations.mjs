@@ -792,6 +792,48 @@ try {
     !!forAdv && (await prisma.guideAdvanceReceipt.count()) === before + 1 && !!ret && ret.amountSatang === 5000 && ret.guideId === forAdv.guideId && !!ret.slipUrl && ret.status === "CLAIMED" && rpErrors.length === 0,
     JSON.stringify({ title, dlgErr, ret: ret && { amount: ret.amountSatang, guide: ret.guideId, slip: !!ret.slipUrl, status: ret.status }, rpErrors }));
   await rp.close();
+
+  // Owner 23 Nov 2026: + Record return is back on the job sheet's advance line (a no-show, the
+  // guide sends the ticket money back). Same form, same ledger; it waits to be checked.
+  const sr = await browser.newPage();
+  const srErrors = [];
+  sr.on("pageerror", (e) => srErrors.push(String(e)));
+  await sr.setViewport({ width: 1280, height: 1800 });
+  await sr.setCookie(await sessionCookie("admin-ops@example.test"));
+  // The advance the return above was recorded against: a claimed return allocates nothing, so
+  // money is still outstanding on its job.
+  const RJ = `${BASE}/job-sheet?guideId=${forAdv?.guideId}&date=${forAdv?.date}&slotIdx=${forAdv?.slotIdx}`;
+  await sr.goto(RJ, { waitUntil: "networkidle0" });
+  await sr.waitForSelector(".js-advance-summary");
+  const retLine = (await text(sr, ".js-advance-summary")).replace(/\s+/g, " ");
+  const retBtn = await sr.$eval(".js-advance-summary .js-advance-record-return", (b) => b.offsetParent !== null && !b.disabled && b.innerText.trim() === "+ Record return").catch(() => false);
+  check("+ Record return is on the job sheet's advance line while money is outstanding (owner 23 Nov 2026)", retBtn, retLine.slice(0, 240));
+  if (retBtn) {
+    const beforeSheet = await prisma.guideAdvanceReceipt.count();
+    await sr.click(".js-advance-summary .js-advance-record-return");
+    await sr.waitForSelector(".js-advance-form .js-advance-submit", { visible: true, timeout: 5000 });
+    const prefilled = await sr.$eval(".js-advance-form input[type=number]", (i) => Number(i.value));
+    const submitLabel = await sr.$eval(".js-advance-submit", (b) => b.innerText.trim());
+    await sr.evaluate(() => { const i = document.querySelector(".js-advance-form input[type=number]"); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(i, "40"); i.dispatchEvent(new Event("input", { bubbles: true })); });
+    const ref = await sr.evaluateHandle(() => [...document.querySelectorAll(".js-advance-form label")].find((l) => /Transfer ref/.test(l.innerText))?.querySelector("input"));
+    await ref.asElement().type("TX-E2E-RET-SHEET");
+    await sr.waitForFunction(() => [...document.querySelectorAll(".js-advance-form select")].some((s) => [...s.options].some((o) => o.value === "bank-e2e")), { timeout: 10000 });
+    await sr.evaluate(() => { const s = [...document.querySelectorAll(".js-advance-form select")].find((x) => [...x.options].some((o) => o.value === "bank-e2e")); s.value = "bank-e2e"; s.dispatchEvent(new Event("change", { bubbles: true })); });
+    await (await sr.$('.js-advance-form input[type="file"]')).uploadFile(SLIP);
+    await pause(200);
+    await sr.click(".js-advance-submit");
+    await sr.waitForFunction(() => !document.querySelector(".js-advance-form"), { timeout: 15000 }).catch(() => {});
+    const sheetRet = await prisma.guideAdvanceReceipt.findFirst({ where: { bankRef: "TX-E2E-RET-SHEET" } });
+    check("…it opens the return form with the outstanding amount, and records the return against this job's guide, waiting to be checked",
+      prefilled > 0 && submitLabel === "Record return" && (await prisma.guideAdvanceReceipt.count()) === beforeSheet + 1 && !!sheetRet && sheetRet.amountSatang === 4000 && sheetRet.guideId === forAdv?.guideId && !!sheetRet.slipUrl && sheetRet.status === "CLAIMED" && srErrors.length === 0,
+      JSON.stringify({ prefilled, submitLabel, ret: sheetRet && { amount: sheetRet.amountSatang, guide: sheetRet.guideId, status: sheetRet.status }, srErrors }));
+    await sr.setViewport({ width: 390, height: 900 });
+    await sr.goto(RJ, { waitUntil: "networkidle0" });
+    await sr.waitForSelector(".js-advance-summary");
+    const phone = await sr.evaluate(() => ({ fits: document.documentElement.scrollWidth <= innerWidth, btn: !!document.querySelector(".js-advance-summary .js-advance-record-return")?.offsetParent }));
+    check("…at 390px the button shows and nothing scrolls sideways", phone.fits && phone.btn, JSON.stringify(phone));
+  }
+  await sr.close();
 } finally {
   await browser.close();
   server.kill();
