@@ -339,7 +339,11 @@ export function isCancellation(raw: unknown): boolean {
  * reference (GYG…, a Viator number) beside it. That one is an OTA booking and must stay in
  * the dispatch inbox.
  */
-export function isDirectWebsiteBooking(b: { confirmationCode?: string | null; externalRef?: string | null }): boolean {
+export function isDirectWebsiteBooking(b: { confirmationCode?: string | null; externalRef?: string | null; source?: string | null }): boolean {
+  // Bókun's back office ("Backend" channel): the office keyed the booking in Bókun itself. It
+  // is a FOLK-T… booking with no OTA reference, yet a real departure that needs a guide — on
+  // 28 Nov 2026 it was the only booking of its tour and nobody could see it (owner, 25 Nov 2026).
+  if (/^backend$/i.test((b.source ?? "").trim())) return false;
   const folk = (v: string | null | undefined) => /^folk-/i.test((v ?? "").trim());
   const ref = (b.externalRef ?? "").trim();
   if (folk(ref)) return true;

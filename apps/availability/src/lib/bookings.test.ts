@@ -332,6 +332,12 @@ describe("isDirectWebsiteBooking — who is kept out of the dispatch inbox", () 
     expect(isDirectWebsiteBooking({ confirmationCode: "folk-0002", externalRef: "  " })).toBe(true);
     expect(isDirectWebsiteBooking({ confirmationCode: null, externalRef: "FOLK-0003" })).toBe(true);
   });
+  it("a booking the office keyed into Bókun's back office (channel Backend) stays in the inbox — it needs a guide", () => {
+    expect(isDirectWebsiteBooking({ source: "Backend", confirmationCode: "FOLK-T900000003", externalRef: "FOLK-T900000003" })).toBe(false);
+    expect(isDirectWebsiteBooking({ source: " backend ", confirmationCode: "FOLK-T900000004", externalRef: null })).toBe(false);
+    // The website's own channel is still kept out, as decided in June 2026.
+    expect(isDirectWebsiteBooking({ source: "Folkpaths.com", confirmationCode: "FOLK-T900000005", externalRef: "FOLK-T900000005" })).toBe(true);
+  });
   it("a booking with no numbers at all is left in the inbox for an operator", () => {
     expect(isDirectWebsiteBooking({ confirmationCode: null, externalRef: null })).toBe(false);
   });
