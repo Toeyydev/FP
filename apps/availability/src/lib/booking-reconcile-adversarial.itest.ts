@@ -229,6 +229,33 @@ describe("ADV6 — a booking moved to another slot leaves its old job and joins 
   });
 });
 
+describe("ADV6b — the Tickets value FolkOPS filled itself does not hold a moved guest", () => {
+  const RATE = "Temple walk with entrance tickets (example)"; // → tickets "included"
+  async function moverWithTickets(tickets: string) {
+    await assign(A, 6); await assign(B, 3, { slotIdx: 1 });
+    const aaa = await mk("AAA6B", 4), mover = await mk("MOVE6B", 2), bbb = await mk("BBB6B", 3, { slotIdx: 1 });
+    await prisma.booking.update({ where: { id: mover.id }, data: { rateTitle: RATE } });
+    const moverRow = { ...rowOf(mover), tickets };
+    await sheet(A, [aaa, mover], { rows: [rowOf(aaa), moverRow] }); await sheet(B, [bbb], { slotIdx: 1 });
+    await prisma.booking.update({ where: { id: mover.id }, data: { slotIdx: 1, datePinned: true } });
+    await run(mover.id, { previous: [{ date: DATE, slotIdx: 0 }] });
+  }
+
+  it("row shows the auto 'included' from the rate: it leaves A's sheet and joins B's", async () => {
+    await moverWithTickets("included");
+    expect(await refsOn(A)).toEqual(["AAA6B"]);
+    expect(await refsOn(B, 1)).toEqual(["BBB6B", "MOVE6B"]);
+    expect(await issues("BOOKING_MOVED_REVIEW_REQUIRED")).toHaveLength(0);
+  });
+
+  it("a person changed Tickets to 'not': the row stays and goes to review", async () => {
+    await moverWithTickets("not");
+    expect(await refsOn(A)).toEqual(["AAA6B", "MOVE6B"]);
+    expect(await refsOn(B, 1)).toEqual(["BBB6B"]);
+    expect((await issues("BOOKING_MOVED_REVIEW_REQUIRED")).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("ADV7 — a booking moved to another tour at the same time", () => {
   it("T-900 → T-901: off A's T-900 sheet, onto B's T-901 sheet", async () => {
     await assign(A, 6); await assign(B, 3, { tourId: "T-901" });

@@ -5,6 +5,7 @@ import { PAX_PER_GUIDE } from "@/lib/capacity";
 import { SLOT_TIMES } from "@/lib/slots";
 import { tourStartMs } from "@/lib/no-show-count";
 import { toSheetBooking, SHEET_BOOKING_STATUSES, type SheetBooking } from "@/lib/sheet-bookings";
+import { ticketsFromRate } from "@/lib/rate-kind";
 import { isReviewExpense, isApproved, type Expense } from "@/lib/jobsheet";
 import { isProtected, type ProtectedRow } from "@/lib/protected-expense-fields";
 import { applyRateDefaults, summariseRates } from "@/lib/rate-payer";
@@ -110,9 +111,16 @@ const rowKey = (r: { bookingNo?: string | null }) => norm(r.bookingNo);
 export const depKey = (d: Departure) => `${d.date}|${d.slotIdx}`;
 const when = (d: Departure) => `${d.date} ${SLOT_TIMES[d.slotIdx] ?? ""}`.trim();
 /** A row somebody recorded something on: an actual count, a no-show, a status, ticket
- *  details. Never removed automatically. */
-export const rowHasEvidence = (r: SheetBooking & { noShowPax?: number | null }) =>
-  r.actualPax != null || !!(r.status ?? "").trim() || (r.noShowPax ?? 0) > 0 || !!String(r.tickets ?? "").trim();
+ *  details. Never removed automatically.
+ *  `autoTickets` is the Tickets value FolkOPS itself fills from the booking's rate
+ *  (toSheetBooking → ticketsFromRate). A row still showing exactly that value has had
+ *  nothing recorded on it by a person, so it does not count. On 26 Nov 2026 a guest moved
+ *  to another date stayed on the old guide's sheet only because of its auto "included". */
+export const rowHasEvidence = (r: SheetBooking & { noShowPax?: number | null }, autoTickets?: string) => {
+  const tickets = String(r.tickets ?? "").trim();
+  return r.actualPax != null || !!(r.status ?? "").trim() || (r.noShowPax ?? 0) > 0
+    || (!!tickets && (autoTickets === undefined || tickets !== autoTickets));
+};
 /** An expense row whose payer a PERSON chose (operator on the sheet, guide in the app). */
 const payerConfirmed = (e: Expense) => ["operator", "guide"].includes((e.paidBySource ?? "").trim()) && !!(e.paidBy ?? "").trim();
 
@@ -403,17 +411,25 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
   const here = new Set(bookings.flatMap(refKeys));
   const strayKeys = [...new Set(sheets.filter((s) => isAssigned(s.guideId)).flatMap((s) => rowsOf(s).map(rowKey)).filter((k) => k && !here.has(k)))];
   const moved = new Map<string, Departure>(); // row key → where the booking is now
+  const movedTickets = new Map<string, string>(); // row key → the Tickets value its booking fills
   if (strayKeys.length) {
     const found = await tx.booking.findMany({
       where: { status: { not: "IGNORED" }, OR: [{ externalRef: { in: strayKeys, mode: "insensitive" } }, { confirmationCode: { in: strayKeys, mode: "insensitive" } }] },
-      select: { externalRef: true, confirmationCode: true, date: true, slotIdx: true, status: true },
+      select: { externalRef: true, confirmationCode: true, date: true, slotIdx: true, status: true, rateTitle: true },
     });
     for (const k of strayKeys) {
       const f = found.filter((x) => refKeys(x).includes(k));
       const to = f.find((x) => LIVE.includes(x.status)) ?? f[0];
-      if (to && to.date && to.slotIdx != null) moved.set(k, { date: to.date, slotIdx: to.slotIdx });
+      if (to && to.date && to.slotIdx != null) { moved.set(k, { date: to.date, slotIdx: to.slotIdx }); movedTickets.set(k, ticketsFromRate(to.rateTitle)); }
     }
   }
+  // The Tickets value FolkOPS would fill for a row's booking (see rowHasEvidence).
+  const autoTicketsOf = (r: SheetBooking): string | undefined => {
+    const k = rowKey(r);
+    if (!k) return undefined;
+    const b = bookings.find((x) => LIVE.includes(x.status) && refKeys(x).includes(k));
+    return b ? ticketsFromRate(b.rateTitle) : movedTickets.get(k);
+  };
   // Editability is needed up front only for sheets that may have to give a row up.
   for (const s of sheets) {
     if (!isAssigned(s.guideId)) continue;
@@ -434,7 +450,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
   // release is withdrawn and the plan is made again with that job holding its rows — so the
   // booking stays where it is and goes to review, and no second job ever receives it.
   const noRelease = new Set<string>();
-  const releasable = (g: string, row: SheetBooking) => !noRelease.has(g) && editable.get(g) === true && !rowHasEvidence(row as SheetRow);
+  const releasable = (g: string, row: SheetBooking) => !noRelease.has(g) && editable.get(g) === true && !rowHasEvidence(row as SheetRow, autoTicketsOf(row));
   const elsewhereMemo = new Map<string, string | null>();
   const elsewhereOf = async (b: LoadedBooking) => {
     if (!elsewhereMemo.has(b.id)) elsewhereMemo.set(b.id, await listedElsewhere(tx, b, dep, now));
@@ -450,7 +466,7 @@ async function reconcileInTx(tx: Tx, dep: Departure, opts: ReconcileOptions, att
     for (const s of sheets) for (const r of rowsOf(s)) {
       const to = moved.get(rowKey(r));
       if (!to || !isAssigned(s.guideId) || releasable(s.guideId, r)) continue;
-      const why = `${r.bookingNo} moved to ${when(to)} but its row here cannot be removed automatically (${rowHasEvidence(r) ? "something is recorded on it" : "the job sheet is locked"})`;
+      const why = `${r.bookingNo} moved to ${when(to)} but its row here cannot be removed automatically (${rowHasEvidence(r, autoTicketsOf(r)) ? "something is recorded on it" : "the job sheet is locked"})`;
       frozenMoved.set(s.guideId, [...(frozenMoved.get(s.guideId) ?? []), { sheetId: s.id, ref: s.ref, row: r.bookingNo, to, why }]);
     }
     frozenLate = new Map();

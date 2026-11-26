@@ -3,7 +3,8 @@
 //
 // Proves: a departure that has guests and no guide offers "Move…"; the form suggests the next
 // morning; confirming moves the booking there, pinned against the channel sync, audited with
-// where it was; the dialog says where it went; and the day stops asking for a guide.
+// where it was; the dialog says where it went; and the day stops asking for a guide. A booking
+// save the server refuses says why (Bookings → All bookings).
 //
 // Run after `next build`:  node scripts/e2e/move-booking.mjs
 // Needs DATABASE_URL (a THROWAWAY database — it truncates), the managed browser and AUTH_SECRET.
@@ -153,6 +154,28 @@ try {
   const left = await page.$eval(".recpast-slot", (x) => x.innerText.replace(/\s+/g, " "));
   check("the departure now shows only the booking that stays, and still asks who guided", /E2E-KEEP-1/i.test(left) && !/E2E-CXL/i.test(left) && /4 pax/.test(left) && !!(await page.$('select[aria-label="Guide for 08:30"]')), left.slice(0, 160));
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "cancel-bookings-done.png") });
+
+  // Bookings → All bookings → a booking: a save the server refuses says why and keeps the
+  // dialog open. It used to stay open with nothing on screen ("it won't move").
+  await page.goto(`${BASE}/bookings`, { waitUntil: "networkidle0" });
+  await page.evaluate(() => [...document.querySelectorAll("button.subtab")].find((b) => /All bookings/i.test(b.innerText)).click());
+  await page.waitForFunction(() => [...document.querySelectorAll("tr")].some((r) => /E2E-KEEP-1/.test(r.innerText)), { timeout: 20000 });
+  await page.evaluate(() => [...document.querySelectorAll("tr")].find((r) => /E2E-KEEP-1/.test(r.innerText)).click());
+  await page.waitForSelector(".modal .mfoot", { timeout: 15000 });
+  await page.evaluate(() => {
+    const el = [...document.querySelectorAll(".modal label")].find((l) => /^pax/i.test(l.innerText.trim())).querySelector("input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "0");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.evaluate(() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => /Save changes/.test(b.innerText)).click());
+  await page.waitForSelector(".js-booking-save-error", { timeout: 15000 });
+  const errText = await page.$eval(".js-booking-save-error", (x) => x.innerText);
+  const keep = await prisma.booking.findFirstOrThrow({ where: { externalRef: "E2E-KEEP-1" } });
+  check("a refused booking save says why, keeps the dialog open, changes nothing", /Not saved/.test(errText) && !!(await page.$(".modal .mfoot")) && keep.pax === 4, errText);
+  const fits = await page.evaluate(() => { const e = document.querySelector(".js-booking-save-error").getBoundingClientRect(); return document.documentElement.scrollWidth <= window.innerWidth + 1 && e.top >= 0 && e.bottom <= window.innerHeight && e.right <= window.innerWidth; });
+  check("the message is on screen at 390px, the page does not scroll sideways", fits);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "booking-save-error.png") });
+  await page.evaluate(() => [...document.querySelectorAll(".modal .mfoot button")].find((b) => /^Close$/.test(b.innerText.trim())).click());
   check("no page errors", errors.length === 0, errors.join(" | "));
 } catch (e) {
   check("run", false, String(e?.stack ?? e).slice(0, 800));
