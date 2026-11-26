@@ -188,7 +188,9 @@ export default function BookingsInbox() {
     await load();
   }
 
+  const [detailErr, setDetailErr] = useState("");
   async function openDetail(id: string) {
+    setDetailErr("");
     const r = await fetch(`/api/bookings?id=${id}`, { cache: "no-store" });
     if (r.ok) setDetail((await r.json()).booking);
   }
@@ -205,7 +207,12 @@ export default function BookingsInbox() {
       tourId: str(d.tourId) || undefined, date: str(d.date) || undefined,
       slotIdx: d.slotIdx != null ? Number(d.slotIdx) : undefined, pax: d.pax != null && d.pax !== "" ? Number(d.pax) : undefined,
     });
-    if (r.ok) { setDetail(null); await load(); }
+    if (r.ok) { setDetail(null); setDetailErr(""); await load(); return; }
+    // Say why. A failed save used to leave the dialog open with nothing on screen.
+    const e = (r.data as { error?: string })?.error;
+    setDetailErr(e === "bad-body" ? "Not saved — a field is too long or not valid. Check the values and try again."
+      : e === "forbidden" ? "Not saved — your account can't edit bookings."
+      : "Not saved — the server refused the change. Try again; if it keeps failing, tell the system designer.");
   }
   // Delete a booking — confirm twice before it's gone for good.
   async function removeBooking(id: string, label: string) {
@@ -585,7 +592,8 @@ export default function BookingsInbox() {
                 </details>
               ) : null}
             </div>
-            <div className="mfoot">
+            <div className="mfoot" style={{ flexWrap: "wrap" }}>
+              {detailErr && <p className="js-booking-save-error" role="alert" style={{ flexBasis: "100%", margin: 0, color: "var(--danger)", fontSize: 13, fontWeight: 600 }}>{detailErr}</p>}
               <button className="btn ghost danger" onClick={() => removeBooking(String(detail.id), `${detail.source} · ${detail.confirmationCode || detail.customerName || "—"}`)}>🗑 Delete</button>
               <button className="btn" onClick={() => setDetail(null)}>Close</button>
               <button className="btn primary" onClick={saveDetail}>Save changes</button>
